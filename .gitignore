@@ -1,0 +1,10 @@
+/target
+**/*.rs.bk
+__pycache__/
+*.py[cod]
+.env
+.env.*
+!.env.example
+
+# IDE (isteğe bağlı — paylaşmak istersen bu satırı sil)
+.idea/
