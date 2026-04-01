@@ -60,7 +60,7 @@ async fn main() -> Result<()> {
     let spot = spot_price::SpotPriceClient::new(http.clone(), cfg.spot_exchange.clone());
     let executor = execution::Executor::new(http.clone(), &cfg).await;
     let mut risk = risk::RiskManager::new(&cfg);
-    let resolver = resolution_checker::ResolutionChecker::new(http.clone());
+    let resolver = resolution_checker::ResolutionChecker::new(http.clone(), &cfg.clob_host);
     let logger = metrics::MetricsLogger::new(&cfg.data_dir)?;
 
     let mut indicator_cache =
