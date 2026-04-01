@@ -133,6 +133,7 @@ mod tests {
                 low: Decimal::from(98 + i),
                 close: Decimal::from(101 + i),
                 volume: Decimal::from(1000),
+                taker_buy_ratio: None,
             })
             .collect()
     }

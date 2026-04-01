@@ -33,7 +33,8 @@ pub type SignalResult = Result<TechnicalSignal, SignalError>;
 #[derive(Debug, Clone)]
 pub struct TechnicalSignal {
     pub direction: SignalDirection,
-    pub probability: Decimal,     // 0.5-1.0
+    /// Implied probability that **YES** wins (direction-aware vs momentum; typically ~0.15–0.85).
+    pub probability: Decimal,
     pub confidence: Decimal,      // 0.5-1.0
     pub reasoning: String,
 }
@@ -59,8 +60,8 @@ pub fn compute_volume_ratio(candles: &[Candle], avg_period: usize) -> f64 {
     }
 }
 
-/// Calculate RSI (Relative Strength Index)
-/// Returns value between 0-100
+/// Wilder (RMA) RSI — matches common exchange / TradingView defaults better than SMA-RSI.
+/// Returns value between 0-100.
 fn calculate_rsi(candles: &[Candle], period: usize) -> Result<f64> {
     if candles.len() < period + 1 {
         anyhow::bail!("Not enough candles for RSI calculation");
@@ -80,9 +81,18 @@ fn calculate_rsi(candles: &[Candle], period: usize) -> Result<f64> {
         }
     }
 
-    // Calculate average gain and loss
-    let avg_gain: f64 = gains.iter().rev().take(period).sum::<f64>() / period as f64;
-    let avg_loss: f64 = losses.iter().rev().take(period).sum::<f64>() / period as f64;
+    if gains.len() < period {
+        anyhow::bail!("Not enough price changes for RSI");
+    }
+
+    let mut avg_gain: f64 = gains[..period].iter().sum::<f64>() / period as f64;
+    let mut avg_loss: f64 = losses[..period].iter().sum::<f64>() / period as f64;
+
+    let p1 = (period - 1) as f64;
+    for i in period..gains.len() {
+        avg_gain = (avg_gain * p1 + gains[i]) / period as f64;
+        avg_loss = (avg_loss * p1 + losses[i]) / period as f64;
+    }
 
     if avg_loss == 0.0 {
         return Ok(100.0);
@@ -94,47 +104,73 @@ fn calculate_rsi(candles: &[Candle], period: usize) -> Result<f64> {
     Ok(rsi)
 }
 
-/// Calculate MACD (Moving Average Convergence Divergence)
-/// Returns (macd_line, signal_line, histogram)
-fn calculate_macd(candles: &[Candle], fast: usize, slow: usize, signal: usize) -> Result<(f64, f64, f64)> {
-    if candles.len() < slow + signal {
+/// Full-bar EMA series (same length as `values`).
+fn ema_series(values: &[f64], period: usize) -> Vec<f64> {
+    if values.is_empty() || period == 0 {
+        return Vec::new();
+    }
+    let k = 2.0 / (period as f64 + 1.0);
+    let mut out = Vec::with_capacity(values.len());
+    let mut ema = values[0];
+    out.push(ema);
+    for &v in values.iter().skip(1) {
+        ema = (v - ema) * k + ema;
+        out.push(ema);
+    }
+    out
+}
+
+/// MACD line, signal line (EMA of MACD), histogram, and bullish crossover (histogram crosses above 0).
+fn calculate_macd(
+    candles: &[Candle],
+    fast: usize,
+    slow: usize,
+    signal_period: usize,
+) -> Result<(f64, f64, f64, bool)> {
+    if signal_period == 0 || candles.len() < slow + signal_period {
         anyhow::bail!("Not enough candles for MACD calculation");
     }
 
-    let closes: Vec<f64> = candles.iter()
+    let closes: Vec<f64> = candles
+        .iter()
         .map(|c| c.close.to_f64().unwrap_or(0.0))
         .collect();
 
-    // Calculate EMAs
-    let ema_fast = calculate_ema(&closes, fast);
-    let ema_slow = calculate_ema(&closes, slow);
+    let ema_fast = ema_series(&closes, fast);
+    let ema_slow = ema_series(&closes, slow);
 
-    let macd_line = ema_fast - ema_slow;
+    let macd_series: Vec<f64> = ema_fast
+        .iter()
+        .zip(ema_slow.iter())
+        .map(|(a, b)| a - b)
+        .collect();
 
-    // MACD signal line is EMA of MACD line
-    // For simplicity, use SMA instead of EMA for signal line
-    let _recent_macd: Vec<f64> = vec![macd_line]; // In real impl, need historical MACD values
-    let signal_line = macd_line; // Simplified
+    let signal_series = ema_series(&macd_series, signal_period);
 
+    let n = macd_series.len();
+    let macd_line = *macd_series.last().unwrap_or(&0.0);
+    let signal_line = *signal_series.last().unwrap_or(&0.0);
     let histogram = macd_line - signal_line;
 
-    Ok((macd_line, signal_line, histogram))
+    let mut bullish_cross = false;
+    if n >= 2 {
+        let prev_macd = macd_series[n - 2];
+        let prev_sig = signal_series[n - 2];
+        let prev_hist = prev_macd - prev_sig;
+        let curr_hist = histogram;
+        bullish_cross = prev_hist <= 0.0 && curr_hist > 0.0;
+    }
+
+    Ok((macd_line, signal_line, histogram, bullish_cross))
 }
 
-/// Calculate EMA (Exponential Moving Average)
+/// Calculate EMA (Exponential Moving Average) — last value only (used by tests / helpers).
 fn calculate_ema(values: &[f64], period: usize) -> f64 {
-    if values.len() < period {
-        return values.last().copied().unwrap_or(0.0);
+    if values.is_empty() {
+        return 0.0;
     }
-
-    let multiplier = 2.0 / (period as f64 + 1.0);
-    let mut ema = values[0];
-
-    for &value in values.iter().skip(1) {
-        ema = (value - ema) * multiplier + ema;
-    }
-
-    ema
+    let s = ema_series(values, period);
+    *s.last().unwrap_or(&0.0)
 }
 
 /// Calculate momentum (rate of change)
@@ -223,18 +259,23 @@ pub fn generate_signal(candles: &[Candle], config: &SignalConfig) -> SignalResul
     }
 
     let rsi = calculate_rsi(candles, config.rsi_period).map_err(|_| SignalError::NoClearSignal)?;
-    let (macd_line, _signal_line, histogram) = calculate_macd(
+    let (macd_line, signal_line, histogram, bullish_cross) = calculate_macd(
         candles,
         config.macd_fast,
         config.macd_slow,
-        config.macd_signal
-    ).map_err(|_| SignalError::NoClearSignal)?;
+        config.macd_signal,
+    )
+    .map_err(|_| SignalError::NoClearSignal)?;
 
     let momentum_5m = calculate_momentum(candles, 5).map_err(|_| SignalError::NoClearSignal)?;
     let momentum_15m = calculate_momentum(candles, 15).map_err(|_| SignalError::NoClearSignal)?;
 
-    // MACD yönü: histogram basit impl’de sıfıra çökebildiği için macd_line kullanılır
-    let macd_dir = if macd_line > 0.0 {
+    // MACD direction: histogram (MACD − signal) is the momentum; tie-break with MACD line vs zero.
+    let macd_dir = if histogram > 0.0 {
+        SignalDirection::Up
+    } else if histogram < 0.0 {
+        SignalDirection::Down
+    } else if macd_line > 0.0 {
         SignalDirection::Up
     } else if macd_line < 0.0 {
         SignalDirection::Down
@@ -257,7 +298,6 @@ pub fn generate_signal(candles: &[Candle], config: &SignalConfig) -> SignalResul
     };
 
     let volume_boost = if volume_ratio > 2.0 { 0.1 } else { 0.0 };
-    let confidence = f64::min(base_confidence + volume_boost, 0.95);
 
     let mut reasons = vec![];
     match cluster_dir {
@@ -266,30 +306,59 @@ pub fn generate_signal(candles: &[Candle], config: &SignalConfig) -> SignalResul
         Some(_) => reasons.push("cluster vs MACD conflict (MACD wins)".to_string()),
     }
     reasons.push(format!("MACD_line:{:.6}", macd_line));
+    reasons.push(format!("MACD_sig:{:.6}", signal_line));
     reasons.push(format!("hist:{:.6}", histogram));
+    if bullish_cross {
+        reasons.push("MACD_hist_cross_up".to_string());
+    }
 
     debug!(
         rsi = rsi,
         macd_line = macd_line,
+        signal_line = signal_line,
+        histogram = histogram,
         cluster = ?cluster_dir,
         volume_ratio = volume_ratio,
         "calculated technical indicators"
     );
 
-    let momentum_magnitude = momentum_5m.abs();
-    let base_probability = 0.5 + momentum_magnitude.min(0.03) / 0.03 * 0.3;
-    let probability = base_probability.min(0.85).max(0.5);
+    let scaled = momentum_5m.abs().min(0.03) / 0.03 * 0.3;
+    // YES-implied probability: UP → higher YES odds; DOWN → lower YES odds (edge vs `yes_price` stays coherent).
+    let base_probability = match direction {
+        SignalDirection::Up => 0.5 + scaled,
+        SignalDirection::Down => 0.5 - scaled,
+    };
+    let probability = base_probability.min(0.85).max(0.15);
+
+    let taker_boost = candles
+        .last()
+        .and_then(|c| c.taker_buy_ratio)
+        .and_then(|r| match direction {
+            SignalDirection::Up if r > 0.55 => Some(0.05_f64),
+            SignalDirection::Down if r < 0.45 => Some(0.05_f64),
+            _ => None,
+        })
+        .unwrap_or(0.0);
+
+    let confidence = f64::min(base_confidence + volume_boost + taker_boost, 0.95);
 
     let probability_dec = Decimal::try_from(probability).unwrap_or(dec!(0.5));
     let confidence_dec = Decimal::try_from(confidence).unwrap_or(dec!(0.5));
 
+    let taker_note = candles
+        .last()
+        .and_then(|c| c.taker_buy_ratio)
+        .map(|r| format!(" taker_buy_ratio:{:.2}", r))
+        .unwrap_or_default();
+
     let reasoning = format!(
-        "{} | RSI:{:.1} Mom5m:{:.2}% Mom15m:{:.2}% Vol:{:.1}x",
+        "{} | RSI:{:.1} Mom5m:{:.2}% Mom15m:{:.2}% Vol:{:.1}x{}",
         reasons.join(" | "),
         rsi,
         momentum_5m * 100.0,
         momentum_15m * 100.0,
-        volume_ratio
+        volume_ratio,
+        taker_note
     );
 
     Ok(TechnicalSignal {
@@ -326,6 +395,36 @@ impl Default for SignalConfig {
     }
 }
 
+/// Higher-timeframe trend filter: last close vs EMA on `htf_candles` must agree with `signal_dir`.
+/// Returns `true` if filter passes (or data too thin / flat — do not block).
+pub fn higher_timeframe_aligns(
+    signal_dir: SignalDirection,
+    htf_candles: &[Candle],
+    ema_period: usize,
+) -> bool {
+    if htf_candles.len() < ema_period.max(5) {
+        return true;
+    }
+    let closes: Vec<f64> = htf_candles
+        .iter()
+        .map(|c| c.close.to_f64().unwrap_or(0.0))
+        .collect();
+    let ema_val = calculate_ema(&closes, ema_period);
+    let last = *closes.last().unwrap_or(&0.0);
+    if last <= 0.0 || ema_val <= 0.0 {
+        return true;
+    }
+    let rel = ((last - ema_val) / ema_val).abs();
+    if rel < 1e-4 {
+        return true;
+    }
+    let htf_up = last > ema_val;
+    match signal_dir {
+        SignalDirection::Up => htf_up,
+        SignalDirection::Down => !htf_up,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -340,6 +439,7 @@ mod tests {
                 low: Decimal::from(98 + i),
                 close: Decimal::from(101 + i),
                 volume: Decimal::from(1000),
+                taker_buy_ratio: None,
             })
             .collect()
     }
@@ -399,6 +499,7 @@ mod tests {
                     low: Decimal::from(98 + i * trend_multiplier),
                     close: Decimal::from(101 + i * trend_multiplier),
                     volume: Decimal::from(1000),
+                    taker_buy_ratio: None,
                 })
                 .collect();
 
@@ -413,8 +514,8 @@ mod tests {
         let result = calculate_macd(&candles, 12, 26, 9);
         assert!(result.is_ok());
 
-        let (macd_line, signal_line, histogram) = result.unwrap();
-        assert_eq!(histogram, macd_line - signal_line);
+        let (macd_line, signal_line, histogram, _) = result.unwrap();
+        assert!((histogram - (macd_line - signal_line)).abs() < 1e-9);
     }
 
     #[test]
@@ -435,6 +536,7 @@ mod tests {
                 low: Decimal::from(98 + i * 2),
                 close: Decimal::from(101 + i * 2),
                 volume: Decimal::from(1000),
+                taker_buy_ratio: None,
             })
             .collect();
 
@@ -452,6 +554,7 @@ mod tests {
                 low: Decimal::from(148 - i * 2),
                 close: Decimal::from(149 - i * 2),
                 volume: Decimal::from(1000),
+                taker_buy_ratio: None,
             })
             .collect();
 
@@ -474,6 +577,6 @@ mod tests {
         let signal = generate_signal(&candles, &config).unwrap();
 
         assert!(signal.confidence >= dec!(0.5) && signal.confidence <= dec!(1.0));
-        assert!(signal.probability >= dec!(0.5) && signal.probability <= dec!(1.0));
+        assert!(signal.probability >= dec!(0.15) && signal.probability <= dec!(0.85));
     }
 }

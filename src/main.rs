@@ -61,7 +61,7 @@ async fn main() -> Result<()> {
     let executor = execution::Executor::new(http.clone(), &cfg).await;
     let mut risk = risk::RiskManager::new(&cfg);
     let resolver = resolution_checker::ResolutionChecker::new(http.clone());
-    let logger = metrics::MetricsLogger::new("data")?;
+    let logger = metrics::MetricsLogger::new(&cfg.data_dir)?;
 
     let mut indicator_cache =
         indicator_cache::IndicatorCache::new(constants::INDICATOR_CACHE_MAX_AGE_SECS);
@@ -77,6 +77,7 @@ async fn main() -> Result<()> {
             &executor,
             &mut risk,
             &mut indicator_cache,
+            &logger,
         )
         .instrument(tracing::info_span!("trading_cycle"))
         .await;

@@ -122,6 +122,7 @@ mod tests {
             low: d,
             close: d,
             volume: Decimal::from(1000),
+            taker_buy_ratio: None,
         }
     }
 

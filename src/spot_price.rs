@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
+use rust_decimal::prelude::ToPrimitive;
 use serde::Deserialize;
 use serde::de::IgnoredAny;
 use tracing::{debug, warn};
@@ -18,6 +19,8 @@ pub struct Candle {
     pub low: Decimal,
     pub close: Decimal,
     pub volume: Decimal,
+    /// Taker buy volume / total volume in `[0, 1]` when Binance provides both (order-flow imbalance).
+    pub taker_buy_ratio: Option<f64>,
 }
 
 /// Client for fetching spot price data from exchanges
@@ -26,29 +29,22 @@ pub struct SpotPriceClient {
     exchange: String,
 }
 
-// Binance API response format
+// Binance API kline: https://binance-docs.github.io/apidocs/spot/en/#kline-candlestick-data
 #[derive(Deserialize)]
 struct BinanceKline(
-    i64,    // Open time
-    String, // Open
-    String, // High
-    String, // Low
-    String, // Close
-    String, // Volume
-    IgnoredAny, // Close time + remaining Binance kline fields (unused)
-    IgnoredAny,
-    IgnoredAny,
-    IgnoredAny,
-    IgnoredAny,
-    IgnoredAny,
+    i64,    // 0 Open time
+    String, // 1 Open
+    String, // 2 High
+    String, // 3 Low
+    String, // 4 Close
+    String, // 5 Volume
+    IgnoredAny, // 6 Close time
+    IgnoredAny, // 7 Quote asset volume
+    IgnoredAny, // 8 Number of trades
+    String, // 9 Taker buy base asset volume
+    IgnoredAny, // 10 Taker buy quote asset volume
+    IgnoredAny, // 11 Ignore
 );
-
-#[derive(Deserialize)]
-struct BinancePrice {
-    #[allow(dead_code)]
-    symbol: String,
-    price: String,
-}
 
 impl SpotPriceClient {
     pub fn new(http: reqwest::Client, exchange: String) -> Self {
@@ -80,14 +76,6 @@ impl SpotPriceClient {
         match exchange {
             "binance" => self.fetch_binance_candles(asset, interval, limit).await,
             _ => anyhow::bail!("Unsupported exchange: {}", exchange),
-        }
-    }
-
-    /// Fetch current spot price for an asset
-    pub async fn fetch_current_price(&self, asset: &str) -> Result<Decimal> {
-        match self.exchange.as_str() {
-            "binance" => self.fetch_binance_price(asset).await,
-            _ => anyhow::bail!("Unsupported exchange: {}", self.exchange),
         }
     }
 
@@ -237,13 +225,22 @@ impl SpotPriceClient {
             .into_iter()
             .filter_map(|k| {
                 let timestamp = DateTime::from_timestamp_millis(k.0)?;
+                let volume: Decimal = k.5.parse().ok()?;
+                let taker_buy_ratio = k.9.parse::<Decimal>().ok().and_then(|taker_base| {
+                    if volume > Decimal::ZERO {
+                        (taker_base / volume).to_f64()
+                    } else {
+                        None
+                    }
+                });
                 Some(Candle {
                     timestamp,
                     open: k.1.parse().ok()?,
                     high: k.2.parse().ok()?,
                     low: k.3.parse().ok()?,
                     close: k.4.parse().ok()?,
-                    volume: k.5.parse().ok()?,
+                    volume,
+                    taker_buy_ratio,
                 })
             })
             .collect();
@@ -268,33 +265,6 @@ impl SpotPriceClient {
             || error_str.contains("connection")
     }
 
-    async fn fetch_binance_price(&self, asset: &str) -> Result<Decimal> {
-        let symbol = format!("{}USDT", asset.to_uppercase());
-
-        let url = format!(
-            "{}/ticker/price?symbol={}",
-            BINANCE_API_BASE, symbol
-        );
-
-        let response = self.http
-            .get(&url)
-            .send()
-            .await
-            .context("Binance price request failed")?;
-
-        if !response.status().is_success() {
-            let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("Binance price API error: {}", body);
-        }
-
-        let price_data: BinancePrice = response
-            .json()
-            .await
-            .context("Failed to parse Binance price response")?;
-
-        price_data.price.parse()
-            .context("Failed to parse price as Decimal")
-    }
 }
 
 #[cfg(test)]
@@ -302,6 +272,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    #[ignore = "network: live Binance API"]
     async fn test_fetch_binance_candles() {
         let client = SpotPriceClient::new(
             reqwest::Client::new(),
@@ -316,15 +287,4 @@ mod tests {
         assert!(candles[0].close > Decimal::ZERO);
     }
 
-    #[tokio::test]
-    async fn test_fetch_current_price() {
-        let client = SpotPriceClient::new(
-            reqwest::Client::new(),
-            "binance".to_string()
-        );
-
-        let price = client.fetch_current_price("BTC").await;
-        assert!(price.is_ok());
-        assert!(price.unwrap() > Decimal::ZERO);
-    }
 }

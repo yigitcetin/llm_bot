@@ -7,11 +7,11 @@ use crate::constants::SLIPPAGE_BPS;
 /// Calculate edge and direction with slippage protection.
 /// Returns `None` if edge is below `min_edge`.
 pub fn calculate(
-    llm_probability: Decimal,
+    signal_probability: Decimal,
     market_yes_price: Decimal,
     min_edge: Decimal,
 ) -> Option<TradeSignal> {
-    let edge = llm_probability - market_yes_price;
+    let edge = signal_probability - market_yes_price;
     let abs_edge = edge.abs();
 
     if abs_edge < min_edge {
@@ -99,33 +99,33 @@ mod tests {
     #[test]
     fn kelly_size_caps_at_max() {
         // Very high edge should still be capped
-        let size = kelly_size(dec!(0.50), dec!(1.0), dec!(1000), dec!(0.05));
+        let size = kelly_size(dec!(0.50), dec!(1.0), dec!(1000), dec!(0.05), dec!(5));
         assert!(size <= dec!(50), "should be capped at 5% = $50");
     }
 
     #[test]
     fn kelly_size_scales_with_confidence() {
-        let high = kelly_size(dec!(0.10), dec!(1.0), dec!(1000), dec!(0.10));
-        let low  = kelly_size(dec!(0.10), dec!(0.5), dec!(1000), dec!(0.10));
+        let high = kelly_size(dec!(0.10), dec!(1.0), dec!(1000), dec!(0.10), dec!(5));
+        let low  = kelly_size(dec!(0.10), dec!(0.5), dec!(1000), dec!(0.10), dec!(5));
         assert!(high > low, "higher confidence should produce larger size");
     }
 
     #[test]
     fn kelly_size_zero_balance() {
-        let size = kelly_size(dec!(0.10), dec!(0.8), Decimal::ZERO, dec!(0.05));
+        let size = kelly_size(dec!(0.10), dec!(0.8), Decimal::ZERO, dec!(0.05), dec!(5));
         assert_eq!(size, Decimal::ZERO);
     }
 
     #[test]
     fn kelly_size_zero_edge() {
-        let size = kelly_size(Decimal::ZERO, dec!(0.8), dec!(1000), dec!(0.05));
+        let size = kelly_size(Decimal::ZERO, dec!(0.8), dec!(1000), dec!(0.05), dec!(5));
         assert_eq!(size, Decimal::ZERO);
     }
 
     #[test]
     fn kelly_size_very_small_fraction() {
         // Edge too small to meet minimum fraction
-        let size = kelly_size(dec!(0.001), dec!(0.5), dec!(1000), dec!(0.05));
+        let size = kelly_size(dec!(0.001), dec!(0.5), dec!(1000), dec!(0.05), dec!(5));
         assert_eq!(size, Decimal::ZERO, "Very small edge should return zero");
     }
 
@@ -163,7 +163,7 @@ mod tests {
     fn kelly_half_scaling() {
         // Verify half-Kelly is being used
         let size_full = dec!(0.10) * dec!(1.0) * dec!(1000); // Full Kelly
-        let size_half = kelly_size(dec!(0.10), dec!(1.0), dec!(1000), dec!(1.0));
+        let size_half = kelly_size(dec!(0.10), dec!(1.0), dec!(1000), dec!(1.0), dec!(5));
 
         // Half-Kelly should be ~50% of full Kelly
         assert!(size_half < size_full);
@@ -172,8 +172,8 @@ mod tests {
 
     #[test]
     fn kelly_confidence_scaling() {
-        let high_conf = kelly_size(dec!(0.10), dec!(1.0), dec!(1000), dec!(0.10));
-        let low_conf = kelly_size(dec!(0.10), dec!(0.5), dec!(1000), dec!(0.10));
+        let high_conf = kelly_size(dec!(0.10), dec!(1.0), dec!(1000), dec!(0.10), dec!(5));
+        let low_conf = kelly_size(dec!(0.10), dec!(0.5), dec!(1000), dec!(0.10), dec!(5));
 
         // Higher confidence should produce exactly 2x size
         assert_eq!(high_conf, low_conf * dec!(2));

@@ -40,20 +40,6 @@ pub const DEFAULT_MAX_RETRIES: u32 = 3;
 /// Base backoff duration for retry logic (in milliseconds)
 pub const RETRY_BACKOFF_BASE_MS: u64 = 1000;
 
-// ── Blockchain Constants ──────────────────────────────────────────────────────
-
-/// USDC token address on Polygon
-#[allow(dead_code)]
-pub const USDC_POLYGON: &str = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
-
-/// Polymarket CTF Exchange contract address
-#[allow(dead_code)]
-pub const CTF_CONTRACT: &str = "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045";
-
-/// Polygon RPC endpoint
-#[allow(dead_code)]
-pub const POLYGON_RPC: &str = "https://polygon-rpc.com";
-
 // ── Cache Configuration ───────────────────────────────────────────────────────
 
 /// Indicator cache max age in seconds (5 minutes)

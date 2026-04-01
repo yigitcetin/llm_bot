@@ -54,6 +54,19 @@ pub struct AppConfig {
     pub builder_api_key: Option<String>,
     pub builder_api_secret: Option<String>,
     pub builder_api_passphrase: Option<String>,
+
+    /// Data directory for `trades.jsonl`, skips, order failures (`data/` by default).
+    pub data_dir: String,
+
+    /// Higher-timeframe trend filter (e.g. 15m EMA vs close).
+    pub htf_enabled: bool,
+    pub htf_interval: String,
+    pub htf_lookback: usize,
+    pub htf_ema_period: usize,
+
+    /// Nudge `min_edge` / `min_confidence` from recent resolved trades.
+    pub adaptive_thresholds: bool,
+    pub adaptive_trade_window: usize,
 }
 
 /// Polymarket signature types
@@ -65,15 +78,6 @@ pub enum SignatureType {
     Proxy,
     /// Gnosis Safe multisig signature
     GnosisSafe,
-}
-
-/// RSI + MACD settings mirrored in [`crate::signals::SignalConfig`].
-#[derive(Debug, Clone, Copy)]
-pub struct TaParams {
-    pub rsi_period: usize,
-    pub macd_fast: usize,
-    pub macd_slow: usize,
-    pub macd_signal: usize,
 }
 
 /// Strategy parameters resolved for one asset (`ASSETS` entry).
@@ -97,6 +101,14 @@ pub struct AssetStrategy {
     pub max_position_pct: Decimal,
     pub daily_loss_limit_pct: Decimal,
     pub volatility_filter: VolatilityFilterConfig,
+
+    pub htf_enabled: bool,
+    pub htf_interval: String,
+    pub htf_lookback: usize,
+    pub htf_ema_period: usize,
+
+    pub adaptive_thresholds: bool,
+    pub adaptive_trade_window: usize,
 }
 
 impl AssetStrategy {
@@ -198,6 +210,20 @@ fn env_override_string(key: &str, asset_upper: &str, fallback: &str) -> String {
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| fallback.to_string())
+}
+
+fn env_override_bool(key: &str, asset_upper: &str, fallback: bool) -> bool {
+    let k = format!("{key}_{asset_upper}");
+    std::env::var(&k)
+        .ok()
+        .or_else(|| std::env::var(key).ok())
+        .map(|v| {
+            matches!(
+                v.to_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(fallback)
 }
 
 /// `VOL_MIN_STD_PCT_BTC` sonra global `VOL_MIN_STD_PCT`.
@@ -341,6 +367,39 @@ impl AppConfig {
             builder_api_key: std::env::var("BUILDER_API_KEY").ok(),
             builder_api_secret: std::env::var("BUILDER_API_SECRET").ok(),
             builder_api_passphrase: std::env::var("BUILDER_API_PASSPHRASE").ok(),
+
+            data_dir: std::env::var("DATA_DIR").unwrap_or_else(|_| "data".to_string()),
+
+            htf_enabled: std::env::var("HTF_ENABLED")
+                .map(|v| {
+                    matches!(
+                        v.to_lowercase().as_str(),
+                        "1" | "true" | "yes" | "on"
+                    )
+                })
+                .unwrap_or(false),
+            htf_interval: std::env::var("HTF_INTERVAL").unwrap_or_else(|_| "15m".to_string()),
+            htf_lookback: std::env::var("HTF_LOOKBACK")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(50),
+            htf_ema_period: std::env::var("HTF_EMA_PERIOD")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(20),
+
+            adaptive_thresholds: std::env::var("ADAPTIVE_THRESHOLDS")
+                .map(|v| {
+                    matches!(
+                        v.to_lowercase().as_str(),
+                        "1" | "true" | "yes" | "on"
+                    )
+                })
+                .unwrap_or(false),
+            adaptive_trade_window: std::env::var("ADAPTIVE_TRADE_WINDOW")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(50),
         };
 
         // Validate configuration before returning
@@ -389,31 +448,41 @@ impl AppConfig {
                     env_override_usize("VOL_SAMPLE_BARS", &su, g)
                 },
             },
+            htf_enabled: env_override_bool("HTF_ENABLED", &su, self.htf_enabled),
+            htf_interval: env_override_string("HTF_INTERVAL", &su, &self.htf_interval),
+            htf_lookback: env_override_usize("HTF_LOOKBACK", &su, self.htf_lookback),
+            htf_ema_period: env_override_usize("HTF_EMA_PERIOD", &su, self.htf_ema_period),
+            adaptive_thresholds: env_override_bool(
+                "ADAPTIVE_THRESHOLDS",
+                &su,
+                self.adaptive_thresholds,
+            ),
+            adaptive_trade_window: env_override_usize(
+                "ADAPTIVE_TRADE_WINDOW",
+                &su,
+                self.adaptive_trade_window,
+            ),
         }
     }
 
-    pub fn ta_params(&self) -> TaParams {
-        TaParams {
-            rsi_period: self.rsi_period,
-            macd_fast: self.macd_fast,
-            macd_slow: self.macd_slow,
-            macd_signal: self.macd_signal,
-        }
-    }
-
-    /// Validate all configuration parameters for business logic correctness
+    /// Validate globals and auth. Per-asset TA/strategy rules live in [`AssetStrategy::validate`].
     pub fn validate(&self) -> Result<()> {
-        // Trading parameter validation
         if self.min_edge <= Decimal::ZERO {
             anyhow::bail!("MIN_EDGE must be positive, got: {}", self.min_edge);
         }
 
         if self.min_edge > dec!(0.50) {
-            anyhow::bail!("MIN_EDGE too high (>50%), unrealistic edge expectation: {}", self.min_edge);
+            anyhow::bail!(
+                "MIN_EDGE too high (>50%), unrealistic edge expectation: {}",
+                self.min_edge
+            );
         }
 
         if self.min_confidence < dec!(0.5) || self.min_confidence > dec!(1.0) {
-            anyhow::bail!("MIN_CONFIDENCE must be between 0.5 and 1.0, got: {}", self.min_confidence);
+            anyhow::bail!(
+                "MIN_CONFIDENCE must be between 0.5 and 1.0, got: {}",
+                self.min_confidence
+            );
         }
 
         if self.max_position_pct <= Decimal::ZERO {
@@ -435,49 +504,13 @@ impl AppConfig {
         }
 
         if self.initial_balance < dec!(1) {
-            anyhow::bail!(
-                "INITIAL_BALANCE too low, got: {}",
-                self.initial_balance
-            );
+            anyhow::bail!("INITIAL_BALANCE too low, got: {}", self.initial_balance);
         }
 
         if self.min_order_usdc < dec!(1) {
             anyhow::bail!("MIN_ORDER_USDC too low (min $1), got: {}", self.min_order_usdc);
         }
 
-        // Technical indicator validation
-        if self.rsi_period < 5 || self.rsi_period > 50 {
-            anyhow::bail!("RSI_PERIOD must be between 5 and 50, got: {}", self.rsi_period);
-        }
-
-        if self.macd_fast >= self.macd_slow {
-            anyhow::bail!(
-                "MACD_FAST ({}) must be less than MACD_SLOW ({})",
-                self.macd_fast,
-                self.macd_slow
-            );
-        }
-
-        if self.candle_lookback < 50 {
-            anyhow::bail!(
-                "CANDLE_LOOKBACK too low for reliable signals (min 50), got: {}",
-                self.candle_lookback
-            );
-        }
-
-        if let Some(r) = self.volume_min_ratio {
-            if r <= 0.0 || r > 5.0 {
-                anyhow::bail!("VOLUME_MIN_RATIO must be in (0, 5], got: {}", r);
-            }
-        }
-        if self.volume_avg_bars < 5 || self.volume_avg_bars > 200 {
-            anyhow::bail!(
-                "VOLUME_AVG_BARS must be between 5 and 200, got: {}",
-                self.volume_avg_bars
-            );
-        }
-
-        // Asset validation
         if self.assets.is_empty() {
             anyhow::bail!("ASSETS cannot be empty");
         }
@@ -486,7 +519,6 @@ impl AppConfig {
             anyhow::bail!("DURATIONS cannot be empty");
         }
 
-        // Polymarket specific validation
         self.validate_polymarket_auth()?;
 
         Ok(())
@@ -540,6 +572,14 @@ impl Default for AppConfig {
             builder_api_key: None,
             builder_api_secret: None,
             builder_api_passphrase: None,
+
+            data_dir: "data".to_string(),
+            htf_enabled: false,
+            htf_interval: "15m".to_string(),
+            htf_lookback: 50,
+            htf_ema_period: 20,
+            adaptive_thresholds: false,
+            adaptive_trade_window: 50,
         }
     }
 }

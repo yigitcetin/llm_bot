@@ -1,4 +1,5 @@
 use rust_decimal::Decimal;
+use rust_decimal_macros::dec;
 
 /// Active Polymarket prediction market.
 #[derive(Debug, Clone)]
@@ -20,41 +21,45 @@ impl Market {
     }
 }
 
-/// A single news article.
-#[derive(Debug, Clone)]
-pub struct NewsItem {
-    pub title: String,
-    pub description: Option<String>,
-    pub published_at: chrono::DateTime<chrono::Utc>,
-    pub source: String,
-    pub url: String,
-}
-
-/// LLM analysis result for a market.
-#[derive(Debug, Clone)]
-pub struct LlmSignal {
-    /// Estimated probability YES resolves true (0.0 - 1.0)
-    pub probability: Decimal,
-    /// LLM's confidence in its estimate (0.0 - 1.0)
-    pub confidence: Decimal,
-    /// Short reasoning string
-    pub reasoning: String,
-    /// Whether the news is actually relevant to this market
-    pub news_relevant: bool,
-}
-
 /// Trade direction.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Direction {
     Yes, // BUY YES token
     No,  // BUY NO token
+}
+
+/// Open position tracked in [`crate::risk::RiskManager`] and resolved by [`crate::resolution_checker::ResolutionChecker`].
+#[derive(Debug, Clone)]
+pub struct OpenPosition {
+    pub condition_id: String,
+    pub order_id: String,
+    pub direction: Direction,
+    pub entry_price: Decimal,
+    pub size_usdc: Decimal,
+    pub size_shares: Decimal,
+    /// Market close time (ms).
+    pub end_date_ms: i64,
+}
+
+impl OpenPosition {
+    /// PnL in USDC when the market resolves (`yes_won`: YES/UP token pays out).
+    pub fn pnl_on_resolution(&self, yes_won: bool) -> Decimal {
+        let bought_yes = self.direction == Direction::Yes;
+        let won = (bought_yes && yes_won) || (!bought_yes && !yes_won);
+
+        if won {
+            (dec!(1) - self.entry_price) * self.size_shares
+        } else {
+            -self.size_usdc
+        }
+    }
 }
 
 /// Result of edge calculation — only produced when edge is large enough.
 #[derive(Debug, Clone)]
 pub struct TradeSignal {
     pub direction: Direction,
-    /// Absolute edge: |llm_probability - market_price|
+    /// Absolute edge: |technical_probability - market_price|
     pub edge: Decimal,
     /// The token price we'll pay
     pub token_price: Decimal,

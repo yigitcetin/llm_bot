@@ -6,9 +6,10 @@ Polymarket tahmin pazarlarında (ör. BTC/ETH, 5m) **teknik analiz** tabanlı si
 
 | Parça | Açıklama |
 |-------|----------|
-| **Kütüphane** `polymarket_llm_bot` | `trading_loop`, Gamma/spot/CLOB istemcileri, `signals` (RSI+momentum kümesi + MACD, spot hacim), `volatility` rejim filtresi, `edge`, `risk`, `indicator_cache`, `backtest` / `walk_forward` |
+| **Kütüphane** `polymarket_llm_bot` | `trading_loop`, Gamma/spot/CLOB istemcileri, `signals` (RSI+momentum kümesi + MACD, spot hacim), `volatility` rejim filtresi, `edge`, `risk`, `indicator_cache`, `resolution_checker` |
 | **Binary** `main` | `.env`, OpenTelemetry (isteğe bağlı), Prometheus `/metrics` (isteğe bağlı), sonsuz tarama döngüsü |
-| **`metrics`** modülü | JSONL dosya logları (`data/`; üretimde opsiyonel kullanım) |
+| **`metrics`** modülü | JSONL: `DATA_DIR/trades.jsonl` (işlem + çözüm sonrası `outcome` / `pnl` / `resolved_at`), `skip_reasons.jsonl`, `order_failures.jsonl` (CLOB hataları) |
+| **`stats` binary** | `cargo run --bin stats` — `trades.jsonl` üzerinde win rate, edge/confidence bucket, PnL özeti |
 | **`prometheus_export`** | Prometheus scrape: `GET /metrics` (ör. `127.0.0.1:9090`) |
 
 ## Veri akışı (özet)
@@ -18,9 +19,9 @@ Gamma API          → aktif pazarlar (likidite, soru metni)
 Binance (spot)     → mumlar
         │
         ▼
-Sinyal üretimi     → RSI + 5m/15m momentum → tek “küme” oyu; MACD çizgisi → ikinci oyu
-                     (çelişirse MACD tie-breaker). İsteğe bağlı: VOLUME_MIN_RATIO altında veto.
-                     Yüksek volume_ratio → güven +0.1 (tavan 0.95).
+Sinyal üretimi     → Wilder RSI + 5m/15m momentum → küme oyu; MACD histogram (signal line EMA) + isteğe bağlı histogram crossover notu.
+                     DOWN yönünde YES-olasılığı düşürülür (edge ile tutarlı). Binance taker buy ratio ile hizalı akışta güven +0.05.
+                     İsteğe bağlı: `HTF_*` ile üst zaman dilimi (ör. 15m) EMA trend filtresi; `ADAPTIVE_THRESHOLDS` ile son trade win rate’e göre min_edge/min_confidence.
         │
         ▼
 Volatilite rejimi  → VOL_MIN/MAX_STD_PCT (getiri std×100; yoksa kapalı)
@@ -41,17 +42,6 @@ RiskManager        → günlük kayıp limiti, pazar başına tek pozisyon
 Execution (CLOB)   → FAK market order (dry-run veya canlı)
 ```
 
-## `analyze` metrikleri (backtest JSON)
-
-- `bars_with_signal`: teknik sinyalin üretildiği bar sayısı (hacim + net sinyal geçti).
-- `volume_low_skips` / `no_clear_signal_skips`: düşük hacim veya net yön yok.
-- `vol_filter_skips`: volatilite rejim filtresi.
-- `volume_low_pct_of_signal_attempts`: tüm sinyal denemeleri içinde düşük hacim oranı.
-
-## Grid arama (`scripts/optimize_analyze.py`)
-
-Tek bir `analyze` JSON’unda interpretable skorunun satır satır dökümü: `./scripts/explain_interpretable_score.py dosya.json`. Çoklu env grid’i ile `cargo run --bin analyze -- --json` tekrarlanır. **Varsayılan skor** `interpretable`: 0–100 birleşik değer; bileşenler (WF OOS Sharpe, tutarlılık, OOS getiri, vol **rejim** atlama, 7/14/30g ufuk robustluğu, backtest **MDD %**, spot **düşük hacim** atlama %) ve `--iw-*` ağırlıkları (normalize). Eski skor: `--score-mode legacy`. `--json-out` interpretable iken `{ "optimize": …, "analyze": … }`; sadece analyze kökü için `--json-out-raw-analyze`. `--json-score-out` yalnızca skor dökümü. Varsayılan `--max-combinations` 10_000.
-
 ## Kurulum
 
 ```bash
@@ -60,7 +50,6 @@ cp env.example .env
 
 cargo build --release
 cargo run --release
-# (varsayılan binary: polymarket-llm-bot — analyze/research için: --bin analyze | --bin research)
 ```
 
 ## Dry run (varsayılan)
@@ -154,6 +143,13 @@ Kimlik bilgileri yoksa yalnızca standart kimlik doğrulanmış CLOB istemcisi k
 | `DAILY_LOSS_LIMIT_PCT` | 0.10 | Günlük kayıp limiti (bakiye oranı) |
 | `INITIAL_BALANCE` | 200 | Risk hesapları için başlangıç |
 | `CYCLE_SECS` | 60 | Tarama periyodu (saniye) |
+| `DATA_DIR` | `data` | JSONL log dizini (`trades.jsonl`, `skip_reasons.jsonl`, `order_failures.jsonl`) |
+| `HTF_ENABLED` / `HTF_INTERVAL` / `HTF_LOOKBACK` / `HTF_EMA_PERIOD` | false / 15m / 50 / 20 | Üst trend filtresi (`HTF_ENABLED_BTC` vb. asset override) |
+| `ADAPTIVE_THRESHOLDS` / `ADAPTIVE_TRADE_WINDOW` | false / 50 | Son N çözülmüş trade win rate’e göre `min_edge` / `min_confidence` ayarı |
+
+```bash
+cargo run --bin stats -- --data-dir data
+```
 
 Tam liste ve yorumlar için `env.example` dosyasına bak.
 
@@ -161,17 +157,7 @@ Tam liste ve yorumlar için `env.example` dosyasına bak.
 
 - `DRY_RUN=true` ile uzun süre çalıştırıp loglardaki atlama nedenlerini (düşük likidite, düşük güven, küçük edge) incele.
 - `MIN_EDGE`, `MIN_CONFIDENCE`, RSI/MACD periyotları ve `CANDLE_*` değerlerini kendi verin için ayarla.
-- **Offline araştırma CLI** (`research` binary): Binance’tan mum çekip backtest veya walk-forward çalıştırır.
-
-```bash
-cargo run --bin research -- backtest --asset btc --interval 1m --limit 500
-cargo run --bin research -- walk-forward --asset btc --limit 1000 --train-window 400 --test-window 300
-cargo run --bin analyze -- --asset btc --interval 1m
-```
-
-`analyze`: 1 / 7 / 14 / 30 günlük pencerelerde backtest + walk-forward özetleri ve kural tabanlı parametre önerileri (JSON: `--json`). Proje kökündeki `.env` yüklenir; `MIN_EDGE`, `CANDLE_INTERVAL`, `VOLUME_MIN_RATIO`, `VOL_MAX_STD_PCT` vb. **mevcut değerleriniz** hem backtest’e hem “şimdiki” sütununa yansır. İnsan okunur çıktıda vol ve hacim satırları özetlenir.
-
-Tam çıktı için `--json`. Yardım: `cargo run --bin research -- --help`. Binance’ta 1000’den fazla mum istendiğinde istemci `endTime` ile sayfalama yapar.
+- Pazar kapandıktan sonra Gamma’dan sonuç gelince `data/trades.jsonl` içindeki ilgili satır güncellenir (`outcome`, `pnl`, `resolved_at`).
 
 ## Lisans ve sorumluluk
 

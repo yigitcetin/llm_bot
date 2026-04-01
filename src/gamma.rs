@@ -36,10 +36,52 @@ struct GammaMarket {
     pub archived: Option<bool>,
 }
 
-#[derive(Debug, Deserialize)]
-struct GammaToken {
+/// Gamma outcome token (YES/NO or UP/DOWN) with last price string from API.
+#[derive(Debug, Clone, Deserialize)]
+pub struct GammaToken {
     pub outcome: String,
     pub price: String,
+}
+
+/// Parse YES and NO prices from Gamma `tokens` and/or stringified `outcomes` + `outcomePrices` JSON arrays.
+pub fn parse_yes_no_prices(
+    tokens: Option<&[GammaToken]>,
+    outcomes: Option<&str>,
+    outcome_prices: Option<&str>,
+) -> (Decimal, Decimal) {
+    let mut yes_price = Decimal::ZERO;
+    let mut no_price = Decimal::ZERO;
+
+    if let Some(ts) = tokens {
+        for token in ts {
+            let price: Decimal = token.price.parse().unwrap_or(Decimal::ZERO);
+            match token.outcome.to_uppercase().as_str() {
+                "YES" | "UP" => yes_price = price,
+                "NO" | "DOWN" => no_price = price,
+                _ => {}
+            }
+        }
+    }
+
+    if yes_price.is_zero() || no_price.is_zero() {
+        if let (Some(outcomes_raw), Some(prices_raw)) = (outcomes, outcome_prices) {
+            if let (Ok(outcomes), Ok(prices)) = (
+                serde_json::from_str::<Vec<String>>(outcomes_raw),
+                serde_json::from_str::<Vec<String>>(prices_raw),
+            ) {
+                for (outcome, price_str) in outcomes.iter().zip(prices.iter()) {
+                    let price: Decimal = price_str.parse().unwrap_or(Decimal::ZERO);
+                    match outcome.to_uppercase().as_str() {
+                        "YES" | "UP" => yes_price = price,
+                        "NO" | "DOWN" => no_price = price,
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+
+    (yes_price, no_price)
 }
 
 // ── Client ────────────────────────────────────────────────────────────────────
@@ -218,38 +260,11 @@ fn parse_market(
             }
         })?;
 
-    // Parse YES and NO prices from tokens (old format) first.
-    let mut yes_price = Decimal::ZERO;
-    let mut no_price = Decimal::ZERO;
-    if let Some(tokens) = &raw.tokens {
-        for token in tokens {
-            let price: Decimal = token.price.parse().unwrap_or(Decimal::ZERO);
-            match token.outcome.to_uppercase().as_str() {
-                "YES" | "UP" => yes_price = price,
-                "NO" | "DOWN" => no_price = price,
-                _ => {}
-            }
-        }
-    }
-
-    // New Gamma format fallback: `outcomes` + `outcomePrices` as stringified JSON arrays.
-    if yes_price.is_zero() || no_price.is_zero() {
-        if let (Some(outcomes_raw), Some(prices_raw)) = (&raw.outcomes, &raw.outcome_prices) {
-            if let (Ok(outcomes), Ok(prices)) = (
-                serde_json::from_str::<Vec<String>>(outcomes_raw),
-                serde_json::from_str::<Vec<String>>(prices_raw),
-            ) {
-                for (outcome, price_str) in outcomes.iter().zip(prices.iter()) {
-                    let price: Decimal = price_str.parse().unwrap_or(Decimal::ZERO);
-                    match outcome.to_uppercase().as_str() {
-                        "YES" | "UP" => yes_price = price,
-                        "NO" | "DOWN" => no_price = price,
-                        _ => {}
-                    }
-                }
-            }
-        }
-    }
+    let (yes_price, no_price) = parse_yes_no_prices(
+        raw.tokens.as_deref(),
+        raw.outcomes.as_deref(),
+        raw.outcome_prices.as_deref(),
+    );
 
     if yes_price.is_zero() || no_price.is_zero() {
         return None;

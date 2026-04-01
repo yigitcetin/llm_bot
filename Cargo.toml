@@ -8,6 +8,10 @@ default-run = "polymarket-llm-bot"
 name = "polymarket_llm_bot"
 path = "src/lib.rs"
 
+[[bin]]
+name = "stats"
+path = "src/bin/stats.rs"
+
 [dependencies]
 # Async runtime
 tokio = { version = "1", features = ["full"] }
@@ -26,7 +30,6 @@ rust_decimal_macros = "1"
 
 # Error handling
 anyhow = "1"
-thiserror = "1"
 
 # Logging
 tracing = "0.1"
@@ -37,9 +40,6 @@ chrono = { version = "0.4", features = ["serde"] }
 
 # Config from env
 dotenvy = "0.15"
-
-# CLI (research binary)
-clap = { version = "4", features = ["derive"] }
 
 # Rate limiting
 tokio-util = "0.7"

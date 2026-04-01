@@ -4,19 +4,37 @@ use anyhow::Result;
 use rust_decimal::Decimal;
 use tracing::info;
 
+use crate::adaptive;
 use crate::config::AppConfig;
-use crate::constants::MIN_LIQUIDITY_USDC;
+use crate::constants::{MIN_CANDLES_FOR_SIGNAL, MIN_LIQUIDITY_USDC};
 use crate::edge;
 use crate::execution::Executor;
 use crate::gamma::GammaClient;
 use crate::indicator_cache::IndicatorCache;
 use crate::market_matcher;
-use crate::metrics::{MetricsLogger, SkipRecord, TradeRecord};
+use crate::metrics::{MetricsLogger, OrderFailureRecord, SkipRecord, TradeRecord};
 use crate::prometheus_export;
-use crate::resolution_checker::OpenPosition;
-use crate::risk::RiskManager;
+use crate::risk::{RiskManager, TradeBlockReason};
+use crate::signals::{compute_volume_ratio, higher_timeframe_aligns};
 use crate::spot_price::SpotPriceClient;
-use crate::volatility::passes_volatility_filter;
+use crate::types::{Market, OpenPosition};
+use crate::volatility::{compute_return_std_pct, passes_volatility_filter};
+
+fn log_skip_decision(
+    logger: &MetricsLogger,
+    market: &Market,
+    reason: &'static str,
+    details: Option<String>,
+) {
+    let _ = logger.log_skip(&SkipRecord::new(
+        market.condition_id.clone(),
+        market.asset.clone(),
+        market.duration.clone(),
+        market.question.clone(),
+        reason,
+        details,
+    ));
+}
 
 /// One full scan-analyze-execute cycle.
 pub async fn run_cycle(
@@ -26,10 +44,8 @@ pub async fn run_cycle(
     executor: &Executor,
     risk: &mut RiskManager,
     indicator_cache: &mut IndicatorCache,
+    logger: &MetricsLogger,
 ) -> Result<()> {
-    let metrics_logger = MetricsLogger::new("data").ok();
-
-    // 1. Fetch active markets
     let markets = gamma.active_markets(&cfg.assets, &cfg.durations).await?;
     prometheus_export::add_markets_scanned(markets.len() as u64);
     info!(count = markets.len(), "markets fetched");
@@ -38,18 +54,13 @@ pub async fn run_cycle(
         let st = cfg.asset_strategy(&market.asset);
         let signal_config = st.signal_config();
 
-        // Skip if already have a position in this market
         if risk.has_position(&market.condition_id) {
-            if let Some(logger) = &metrics_logger {
-                let _ = logger.log_skip(&SkipRecord::new(
-                    market.condition_id.clone(),
-                    market.asset.clone(),
-                    market.duration.clone(),
-                    market.question.clone(),
-                    "already_have_open_position",
-                    None,
-                ));
-            }
+            log_skip_decision(
+                logger,
+                &market,
+                "already_have_open_position",
+                None,
+            );
             info!(
                 condition_id = %market.condition_id,
                 question = %market.question,
@@ -58,18 +69,13 @@ pub async fn run_cycle(
             continue;
         }
 
-        // Skip low-liquidity markets
         if market.liquidity < MIN_LIQUIDITY_USDC {
-            if let Some(logger) = &metrics_logger {
-                let _ = logger.log_skip(&SkipRecord::new(
-                    market.condition_id.clone(),
-                    market.asset.clone(),
-                    market.duration.clone(),
-                    market.question.clone(),
-                    "liquidity_too_low",
-                    Some(format!("liquidity={}, min={}", market.liquidity, MIN_LIQUIDITY_USDC)),
-                ));
-            }
+            log_skip_decision(
+                logger,
+                &market,
+                "liquidity_too_low",
+                Some(format!("liquidity={}, min={}", market.liquidity, MIN_LIQUIDITY_USDC)),
+            );
             info!(
                 condition_id = %market.condition_id,
                 question = %market.question,
@@ -80,7 +86,6 @@ pub async fn run_cycle(
             continue;
         }
 
-        // 2. Fetch spot price candles
         let candles = spot
             .fetch_candles_at_exchange(
                 &market.asset,
@@ -90,17 +95,13 @@ pub async fn run_cycle(
             )
             .await?;
 
-        if candles.len() < 100 {
-            if let Some(logger) = &metrics_logger {
-                let _ = logger.log_skip(&SkipRecord::new(
-                    market.condition_id.clone(),
-                    market.asset.clone(),
-                    market.duration.clone(),
-                    market.question.clone(),
-                    "not_enough_candles",
-                    Some(format!("candle_count={}", candles.len())),
-                ));
-            }
+        if candles.len() < MIN_CANDLES_FOR_SIGNAL {
+            log_skip_decision(
+                logger,
+                &market,
+                "not_enough_candles",
+                Some(format!("candle_count={}", candles.len())),
+            );
             info!(
                 condition_id = %market.condition_id,
                 question = %market.question,
@@ -111,7 +112,6 @@ pub async fn run_cycle(
             continue;
         }
 
-        // 3. Generate technical signal (with caching)
         let signal = match indicator_cache.get_or_compute(
             &market.asset,
             &st.candle_interval,
@@ -122,32 +122,29 @@ pub async fn run_cycle(
             Err(e) => {
                 let msg = e.to_string();
                 if msg.contains("volume below") {
-                    if let Some(logger) = &metrics_logger {
-                        let _ = logger.log_skip(&SkipRecord::new(
-                            market.condition_id.clone(),
-                            market.asset.clone(),
-                            market.duration.clone(),
-                            market.question.clone(),
-                            "spot_volume_below_threshold",
-                            None,
-                        ));
-                    }
+                    let vr = compute_volume_ratio(&candles, signal_config.volume_avg_bars.max(5));
+                    let detail = signal_config
+                        .volume_min_ratio
+                        .map(|v| format!("volume_ratio={:.4}, min_ratio={:.4}", vr, v))
+                        .unwrap_or_else(|| format!("volume_ratio={:.4}", vr));
+                    log_skip_decision(
+                        logger,
+                        &market,
+                        "spot_volume_below_threshold",
+                        Some(detail),
+                    );
                     info!(
                         condition_id = %market.condition_id,
                         question = %market.question,
                         "skip: spot volume below VOLUME_MIN_RATIO"
                     );
                 } else {
-                    if let Some(logger) = &metrics_logger {
-                        let _ = logger.log_skip(&SkipRecord::new(
-                            market.condition_id.clone(),
-                            market.asset.clone(),
-                            market.duration.clone(),
-                            market.question.clone(),
-                            "signal_generation_failed",
-                            Some(e.to_string()),
-                        ));
-                    }
+                    log_skip_decision(
+                        logger,
+                        &market,
+                        "signal_generation_failed",
+                        Some(e.to_string()),
+                    );
                     info!(
                         condition_id = %market.condition_id,
                         question = %market.question,
@@ -160,16 +157,23 @@ pub async fn run_cycle(
         };
 
         if !passes_volatility_filter(&candles, &st.volatility_filter) {
-            if let Some(logger) = &metrics_logger {
-                let _ = logger.log_skip(&SkipRecord::new(
-                    market.condition_id.clone(),
-                    market.asset.clone(),
-                    market.duration.clone(),
-                    market.question.clone(),
-                    "volatility_filter",
-                    None,
-                ));
-            }
+            let vol_detail = compute_return_std_pct(&candles, st.volatility_filter.sample_bars)
+                .map(|v| {
+                    format!(
+                        "vol_std_pct={}, sample_bars={}, min={:?}, max={:?}",
+                        v,
+                        st.volatility_filter.sample_bars,
+                        st.volatility_filter.min_std_pct,
+                        st.volatility_filter.max_std_pct
+                    )
+                })
+                .unwrap_or_else(|| "vol_std_pct=unknown".to_string());
+            log_skip_decision(
+                logger,
+                &market,
+                "volatility_filter",
+                Some(vol_detail),
+            );
             info!(
                 condition_id = %market.condition_id,
                 question = %market.question,
@@ -178,39 +182,85 @@ pub async fn run_cycle(
             continue;
         }
 
-        if signal.confidence < st.min_confidence {
-            if let Some(logger) = &metrics_logger {
-                let _ = logger.log_skip(&SkipRecord::new(
-                    market.condition_id.clone(),
-                    market.asset.clone(),
-                    market.duration.clone(),
-                    market.question.clone(),
-                    "confidence_too_low",
-                    Some(format!("confidence={}, threshold={}", signal.confidence, st.min_confidence)),
-                ));
+        if st.htf_enabled {
+            match spot
+                .fetch_candles_at_exchange(
+                    &market.asset,
+                    &st.htf_interval,
+                    st.htf_lookback,
+                    &st.spot_exchange,
+                )
+                .await
+            {
+                Ok(htf) => {
+                    if !higher_timeframe_aligns(signal.direction, &htf, st.htf_ema_period) {
+                        log_skip_decision(
+                            logger,
+                            &market,
+                            "htf_trend_mismatch",
+                            Some(format!(
+                                "htf_interval={}, ema_period={}, lookback={}",
+                                st.htf_interval, st.htf_ema_period, st.htf_lookback
+                            )),
+                        );
+                        info!(
+                            condition_id = %market.condition_id,
+                            direction = ?signal.direction,
+                            "skip: higher timeframe trend mismatch"
+                        );
+                        continue;
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        asset = %market.asset,
+                        "HTF candle fetch failed — continuing without HTF filter"
+                    );
+                }
             }
+        }
+
+        let trades_path = format!("{}/trades.jsonl", cfg.data_dir);
+        let (eff_min_edge, eff_min_confidence) = adaptive::effective_thresholds(
+            &trades_path,
+            &market.asset,
+            st.min_edge,
+            st.min_confidence,
+            st.adaptive_trade_window,
+            st.adaptive_thresholds,
+        );
+
+        if signal.confidence < eff_min_confidence {
+            log_skip_decision(
+                logger,
+                &market,
+                "confidence_too_low",
+                Some(format!(
+                    "confidence={}, threshold={} (base={}, adaptive={})",
+                    signal.confidence,
+                    eff_min_confidence,
+                    st.min_confidence,
+                    st.adaptive_thresholds
+                )),
+            );
             info!(
                 "skip: signal confidence too low (confidence={}, threshold={})",
                 signal.confidence,
-                st.min_confidence
+                eff_min_confidence
             );
             continue;
         }
 
-        // 4. Match signal to market question
         let direction = match market_matcher::match_signal_to_market(signal.as_ref(), &market) {
             Some(dir) => dir,
             None => {
-                if let Some(logger) = &metrics_logger {
-                    let _ = logger.log_skip(&SkipRecord::new(
-                        market.condition_id.clone(),
-                        market.asset.clone(),
-                        market.duration.clone(),
-                        market.question.clone(),
-                        "cannot_match_market_question",
-                        None,
-                    ));
-                }
+                log_skip_decision(
+                    logger,
+                    &market,
+                    "cannot_match_market_question",
+                    None,
+                );
                 info!(
                     condition_id = %market.condition_id,
                     question = %market.question,
@@ -220,42 +270,39 @@ pub async fn run_cycle(
             }
         };
 
-        // 5. Edge calculation
         let edge_result = edge::calculate(
             signal.probability,
             market.yes_price,
-            st.min_edge,
+            eff_min_edge,
         );
 
         let Some(mut trade) = edge_result else {
-            if let Some(logger) = &metrics_logger {
-                let _ = logger.log_skip(&SkipRecord::new(
-                    market.condition_id.clone(),
-                    market.asset.clone(),
-                    market.duration.clone(),
-                    market.question.clone(),
-                    "edge_too_small",
-                    Some(format!(
-                        "signal_prob={}, market_yes_price={}, min_edge={}",
-                        signal.probability, market.yes_price, st.min_edge
-                    )),
-                ));
-            }
+            log_skip_decision(
+                logger,
+                &market,
+                "edge_too_small",
+                Some(format!(
+                    "signal_prob={}, market_yes_price={}, min_edge={} (base={}, adaptive={})",
+                    signal.probability,
+                    market.yes_price,
+                    eff_min_edge,
+                    st.min_edge,
+                    st.adaptive_thresholds
+                )),
+            );
             info!(
                 condition_id = %market.condition_id,
                 question = %market.question,
                 signal_prob = %signal.probability,
                 market_price = %market.yes_price,
-                threshold = %st.min_edge,
+                threshold = %eff_min_edge,
                 "skip: edge too small"
             );
             continue;
         };
 
-        // Override trade direction with matched direction
         trade.direction = direction;
 
-        // 6. Position sizing (half-Kelly)
         let balance = risk.available_balance();
         let size_usdc = edge::kelly_size(
             trade.edge,
@@ -266,16 +313,12 @@ pub async fn run_cycle(
         );
 
         if size_usdc < st.min_order_usdc {
-            if let Some(logger) = &metrics_logger {
-                let _ = logger.log_skip(&SkipRecord::new(
-                    market.condition_id.clone(),
-                    market.asset.clone(),
-                    market.duration.clone(),
-                    market.question.clone(),
-                    "order_size_below_minimum",
-                    Some(format!("size_usdc={}, min_order_usdc={}", size_usdc, st.min_order_usdc)),
-                ));
-            }
+            log_skip_decision(
+                logger,
+                &market,
+                "order_size_below_minimum",
+                Some(format!("size_usdc={}, min_order_usdc={}", size_usdc, st.min_order_usdc)),
+            );
             info!(
                 condition_id = %market.condition_id,
                 question = %market.question,
@@ -286,26 +329,30 @@ pub async fn run_cycle(
             continue;
         }
 
-        // 7. Risk check
-        if !risk.can_trade(size_usdc, &market.condition_id, st.max_position_pct) {
-            if let Some(logger) = &metrics_logger {
-                let _ = logger.log_skip(&SkipRecord::new(
-                    market.condition_id.clone(),
-                    market.asset.clone(),
-                    market.duration.clone(),
-                    market.question.clone(),
-                    "risk_manager_blocked_trade",
-                    Some(format!("size_usdc={}, max_position_pct={}", size_usdc, st.max_position_pct)),
-                ));
-            }
+        if let Some(reason) =
+            risk.trade_block_reason(size_usdc, &market.condition_id, st.max_position_pct)
+        {
+            log_skip_decision(
+                logger,
+                &market,
+                "risk_manager_blocked_trade",
+                Some(format!(
+                    "sub_reason={}, size_usdc={}, balance={}, max_position_pct={}, daily_loss_limit_hit={}",
+                    reason,
+                    size_usdc,
+                    risk.available_balance(),
+                    st.max_position_pct,
+                    matches!(reason, TradeBlockReason::DailyLossLimit),
+                )),
+            );
             tracing::warn!(
                 condition_id = %market.condition_id,
+                reason = %reason,
                 "risk manager blocked trade"
             );
             continue;
         }
 
-        // 8. Execute
         info!(
             condition_id = %market.condition_id,
             asset = %market.asset,
@@ -327,24 +374,21 @@ pub async fn run_cycle(
                     Decimal::ZERO
                 };
 
-                if let Some(logger) = &metrics_logger {
-                    let record = TradeRecord::new(
-                        market.condition_id.clone(),
-                        market.asset.clone(),
-                        market.duration.clone(),
-                        trade.direction,
-                        trade.token_price,
-                        size_usdc,
-                        size_shares,
-                        signal.probability,
-                        signal.confidence,
-                        trade.edge,
-                        String::new(),
-                        signal.reasoning.clone(),
-                        order_id.clone(),
-                    );
-                    let _ = logger.log_trade(&record);
-                }
+                let record = TradeRecord::new(
+                    market.condition_id.clone(),
+                    market.asset.clone(),
+                    market.duration.clone(),
+                    trade.direction,
+                    trade.token_price,
+                    size_usdc,
+                    size_shares,
+                    signal.probability,
+                    signal.confidence,
+                    trade.edge,
+                    signal.reasoning.clone(),
+                    order_id.clone(),
+                );
+                let _ = logger.log_trade(&record);
 
                 info!(
                     order_id = %order_id,
@@ -356,14 +400,10 @@ pub async fn run_cycle(
                     prometheus_export::record_trade_success();
                 }
 
-                // OpenPosition oluştur ve RiskManager'a kaydet
                 let position = OpenPosition {
                     condition_id: market.condition_id.clone(),
                     order_id: order_id.clone(),
-                    direction: match trade.direction {
-                        crate::types::Direction::Yes => "YES".to_string(),
-                        crate::types::Direction::No => "NO".to_string(),
-                    },
+                    direction: trade.direction,
                     entry_price: trade.token_price,
                     size_usdc,
                     size_shares,
@@ -378,6 +418,13 @@ pub async fn run_cycle(
                     condition_id = %market.condition_id,
                     "order placement failed"
                 );
+                let _ = logger.log_order_failure(&OrderFailureRecord::new(
+                    market.condition_id.clone(),
+                    market.asset.clone(),
+                    market.duration.clone(),
+                    market.question.clone(),
+                    e.to_string(),
+                ));
             }
         }
     }

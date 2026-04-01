@@ -1,9 +1,30 @@
 use rust_decimal::Decimal;
 use tracing::warn;
 use std::collections::HashMap;
-use crate::resolution_checker::OpenPosition;
+use std::fmt;
 
 use crate::config::AppConfig;
+use crate::types::OpenPosition;
+
+/// Why [`RiskManager`] refused a new trade (for skip logging / metrics).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TradeBlockReason {
+    DailyLossLimit,
+    DuplicateMarket,
+    PositionSizeExceedsMax,
+    InsufficientBalance,
+}
+
+impl fmt::Display for TradeBlockReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::DailyLossLimit => write!(f, "daily_loss_limit"),
+            Self::DuplicateMarket => write!(f, "duplicate_market_position"),
+            Self::PositionSizeExceedsMax => write!(f, "position_size_exceeds_max"),
+            Self::InsufficientBalance => write!(f, "insufficient_balance"),
+        }
+    }
+}
 
 pub struct RiskManager {
     balance: Decimal,
@@ -24,13 +45,13 @@ impl RiskManager {
         }
     }
 
-    /// Check if we can open a new trade (`max_position_pct` from [`crate::config::AssetStrategy`] per asset).
-    pub fn can_trade(
+    /// If a trade is blocked, returns the reason (for skip `details`).
+    pub fn trade_block_reason(
         &mut self,
         size_usdc: Decimal,
         condition_id: &str,
         max_position_pct: Decimal,
-    ) -> bool {
+    ) -> Option<TradeBlockReason> {
         self.maybe_reset_daily();
 
         if self.daily_loss >= self.daily_loss_limit {
@@ -39,11 +60,11 @@ impl RiskManager {
                 limit = %self.daily_loss_limit,
                 "daily loss limit reached — halting"
             );
-            return false;
+            return Some(TradeBlockReason::DailyLossLimit);
         }
 
         if self.open_positions.contains_key(condition_id) {
-            return false;
+            return Some(TradeBlockReason::DuplicateMarket);
         }
 
         let max_size = self.balance * max_position_pct;
@@ -53,17 +74,28 @@ impl RiskManager {
                 max = %max_size,
                 "position size exceeds limit"
             );
-            return false;
+            return Some(TradeBlockReason::PositionSizeExceedsMax);
         }
 
         if size_usdc > self.balance {
             warn!("insufficient balance");
-            return false;
+            return Some(TradeBlockReason::InsufficientBalance);
         }
 
-        true
+        None
     }
-    
+
+    /// Check if we can open a new trade (`max_position_pct` from [`crate::config::AssetStrategy`] per asset).
+    pub fn can_trade(
+        &mut self,
+        size_usdc: Decimal,
+        condition_id: &str,
+        max_position_pct: Decimal,
+    ) -> bool {
+        self.trade_block_reason(size_usdc, condition_id, max_position_pct)
+            .is_none()
+    }
+
     pub fn available_balance(&self) -> Decimal {
         self.balance
     }
@@ -77,14 +109,14 @@ impl RiskManager {
     /// Call when a position resolves.
     pub fn record_resolution(&mut self, pos: &OpenPosition, pnl: Decimal) {
         self.open_positions.remove(&pos.condition_id);
-    
-        // 🔥 stake + pnl geri eklenmeli
+
+        // Stake returned + PnL (negative PnL = loss).
         self.balance += pos.size_usdc + pnl;
-    
+
         if pnl < Decimal::ZERO {
             self.daily_loss += pnl.abs();
         }
-    
+
         tracing::info!(
             condition_id = %pos.condition_id,
             pnl = %pnl,
@@ -107,10 +139,6 @@ impl RiskManager {
         self.open_positions.contains_key(condition_id)
     }
 
-    pub fn open_positions(&self) -> Vec<String> {
-        self.open_positions.keys().cloned().collect()
-    }
-
     pub fn open_positions_detail(&self) -> Vec<OpenPosition> {
         self.open_positions.values().cloned().collect()
     }
@@ -120,6 +148,7 @@ impl RiskManager {
 mod tests {
     use super::*;
     use crate::config::{AppConfig, SignatureType};
+    use crate::types::Direction;
     use rust_decimal_macros::dec;
 
     fn test_cfg() -> AppConfig {
@@ -152,6 +181,14 @@ mod tests {
             builder_api_key: None,
             builder_api_secret: None,
             builder_api_passphrase: None,
+
+            data_dir: "data".to_string(),
+            htf_enabled: false,
+            htf_interval: "15m".to_string(),
+            htf_lookback: 50,
+            htf_ema_period: 20,
+            adaptive_thresholds: false,
+            adaptive_trade_window: 50,
         }
     }
 
@@ -169,12 +206,12 @@ mod tests {
             OpenPosition {
                 condition_id: "cid1".to_string(),
                 order_id: "order-1".to_string(),
-                direction: "YES".to_string(),
+                direction: Direction::Yes,
                 entry_price: dec!(0.5),
                 size_usdc: dec!(5),
-                size_shares: dec!(10), // 5 / 0.5
+                size_shares: dec!(10),
                 end_date_ms: 0,
-            }
+            },
         );
         assert!(!rm.can_trade(dec!(5), "cid1", dec!(0.05)));
     }
@@ -182,14 +219,12 @@ mod tests {
     #[test]
     fn cannot_trade_over_position_limit() {
         let mut rm = RiskManager::new(&test_cfg());
-        // 5% of 200 = $10 max
         assert!(!rm.can_trade(dec!(20), "cid1", dec!(0.05)));
     }
 
     #[test]
     fn daily_loss_limit_halts_trading() {
         let mut rm = RiskManager::new(&test_cfg());
-        // Simulate $20 daily loss (10% of $200 = $20 limit)
         rm.daily_loss = dec!(20);
         assert!(!rm.can_trade(dec!(5), "cid1", dec!(0.05)));
     }
