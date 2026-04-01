@@ -11,6 +11,7 @@ use crate::gamma::GammaClient;
 use crate::positions::{Position, PositionTracker};
 use crate::risk::RiskManager;
 use crate::types::Direction;
+use crate::resolution_checker::OpenPosition;
 
 /// Watch for market resolutions and calculate P&L.
 pub async fn watch_resolutions(
@@ -44,8 +45,21 @@ pub async fn watch_resolutions(
                     "position resolved"
                 );
 
+                let open_pos = OpenPosition {
+                    condition_id: position.condition_id.clone(),
+                    order_id: position.order_id.clone(),
+                    direction: match position.side {
+                        Direction::Yes => "YES".to_string(),
+                        Direction::No => "NO".to_string(),
+                    },
+                    entry_price: position.entry_price,
+                    size_usdc: position.size_usdc,
+                    size_shares: position.size_shares,
+                    end_date_ms: position.opened_at.timestamp_millis(), // geçici
+                };
+
                 // Record resolution in risk manager
-                risk.record_resolution(&position.condition_id, pnl);
+                risk.record_resolution(&open_pos, pnl);
 
                 // Remove from position tracker
                 positions.remove(&position.condition_id);

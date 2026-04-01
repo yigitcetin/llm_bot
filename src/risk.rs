@@ -1,6 +1,7 @@
 use rust_decimal::Decimal;
-use std::collections::HashSet;
 use tracing::warn;
+use std::collections::HashMap;
+use crate::resolution_checker::OpenPosition;
 
 use crate::config::AppConfig;
 
@@ -8,7 +9,7 @@ pub struct RiskManager {
     balance: Decimal,
     daily_loss_limit: Decimal,
     daily_loss: Decimal,
-    open_positions: HashSet<String>,
+    open_positions: HashMap<String, OpenPosition>,
     last_reset: chrono::NaiveDate,
 }
 
@@ -18,7 +19,7 @@ impl RiskManager {
             balance: cfg.initial_balance,
             daily_loss_limit: cfg.initial_balance * cfg.daily_loss_limit_pct,
             daily_loss: Decimal::ZERO,
-            open_positions: HashSet::new(),
+            open_positions: HashMap::new(),
             last_reset: chrono::Utc::now().date_naive(),
         }
     }
@@ -41,7 +42,7 @@ impl RiskManager {
             return false;
         }
 
-        if self.open_positions.contains(condition_id) {
+        if self.open_positions.contains_key(condition_id) {
             return false;
         }
 
@@ -62,34 +63,30 @@ impl RiskManager {
 
         true
     }
-
-    pub fn has_position(&self, condition_id: &str) -> bool {
-        self.open_positions.contains(condition_id)
-    }
-
+    
     pub fn available_balance(&self) -> Decimal {
         self.balance
     }
 
     /// Call when an order is placed.
-    pub fn record_trade(&mut self, size_usdc: Decimal, condition_id: String) {
+    pub fn record_trade(&mut self, size_usdc: Decimal, position: OpenPosition) {
         self.balance -= size_usdc;
-        self.open_positions.insert(condition_id);
+        self.open_positions.insert(position.condition_id.clone(), position);
     }
 
     /// Call when a position resolves.
-    pub fn record_resolution(
-        &mut self,
-        condition_id: &str,
-        pnl: Decimal, // positive = win, negative = loss
-    ) {
-        self.open_positions.remove(condition_id);
-        self.balance += pnl;
+    pub fn record_resolution(&mut self, pos: &OpenPosition, pnl: Decimal) {
+        self.open_positions.remove(&pos.condition_id);
+    
+        // 🔥 stake + pnl geri eklenmeli
+        self.balance += pos.size_usdc + pnl;
+    
         if pnl < Decimal::ZERO {
             self.daily_loss += pnl.abs();
         }
+    
         tracing::info!(
-            condition_id = %condition_id,
+            condition_id = %pos.condition_id,
             pnl = %pnl,
             balance = %self.balance,
             daily_loss = %self.daily_loss,
@@ -104,6 +101,18 @@ impl RiskManager {
             self.last_reset = today;
             tracing::info!("daily loss counter reset");
         }
+    }
+
+    pub fn has_position(&self, condition_id: &str) -> bool {
+        self.open_positions.contains_key(condition_id)
+    }
+
+    pub fn open_positions(&self) -> Vec<String> {
+        self.open_positions.keys().cloned().collect()
+    }
+
+    pub fn open_positions_detail(&self) -> Vec<OpenPosition> {
+        self.open_positions.values().cloned().collect()
     }
 }
 
@@ -155,7 +164,18 @@ mod tests {
     #[test]
     fn cannot_trade_twice_same_market() {
         let mut rm = RiskManager::new(&test_cfg());
-        rm.record_trade(dec!(5), "cid1".to_string());
+        rm.record_trade(
+            dec!(5),
+            OpenPosition {
+                condition_id: "cid1".to_string(),
+                order_id: "order-1".to_string(),
+                direction: "YES".to_string(),
+                entry_price: dec!(0.5),
+                size_usdc: dec!(5),
+                size_shares: dec!(10), // 5 / 0.5
+                end_date_ms: 0,
+            }
+        );
         assert!(!rm.can_trade(dec!(5), "cid1", dec!(0.05)));
     }
 

@@ -15,6 +15,8 @@ use polymarket_llm_bot::risk;
 use polymarket_llm_bot::spot_price;
 use polymarket_llm_bot::telemetry;
 use polymarket_llm_bot::trading_loop::run_cycle;
+use polymarket_llm_bot::metrics;
+use polymarket_llm_bot::resolution_checker;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -58,6 +60,9 @@ async fn main() -> Result<()> {
     let spot = spot_price::SpotPriceClient::new(http.clone(), cfg.spot_exchange.clone());
     let executor = execution::Executor::new(http.clone(), &cfg).await;
     let mut risk = risk::RiskManager::new(&cfg);
+    let resolver = resolution_checker::ResolutionChecker::new(http.clone());
+    let logger = metrics::MetricsLogger::new("data")?;
+
     let mut indicator_cache =
         indicator_cache::IndicatorCache::new(constants::INDICATOR_CACHE_MAX_AGE_SECS);
 
@@ -84,6 +89,9 @@ async fn main() -> Result<()> {
         indicator_cache.cleanup();
 
         tokio::time::sleep(std::time::Duration::from_secs(cfg.cycle_secs)).await;
+
+        let open = risk.open_positions_detail();
+        resolver.check_and_resolve(&open, &mut risk, &logger).await?;
     }
 }
 

@@ -5,7 +5,7 @@ use tracing::{info, warn};
 
 use polymarket_client_sdk::auth::builder::Builder;
 use polymarket_client_sdk::auth::state::Authenticated;
-use polymarket_client_sdk::auth::{Kind, Normal};
+use polymarket_client_sdk::auth::{Kind, Normal, Signer};
 use polymarket_client_sdk::clob;
 use polymarket_client_sdk::clob::types::{Amount, OrderType, Side};
 use polymarket_client_sdk::types::U256;
@@ -50,7 +50,7 @@ impl Executor {
 
         // Parse private key
         let signer = match cfg.polymarket_private_key.parse::<alloy::signers::local::PrivateKeySigner>() {
-            Ok(s) => s,
+            Ok(s) => s.with_chain_id(Some(cfg.chain_id)),
             Err(e) => {
                 warn!(error = %e, "failed to parse POLYMARKET_PRIVATE_KEY — falling back to dry-run");
                 return Self {

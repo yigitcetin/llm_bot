@@ -25,3 +25,4 @@ pub mod walk_forward;
 pub mod positions;
 pub mod resolution;
 pub mod redeem;
+pub mod resolution_checker;

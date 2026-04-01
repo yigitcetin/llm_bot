@@ -91,6 +91,7 @@ pub struct ResolutionRecord {
 pub struct MetricsLogger {
     trades_path: String,
     resolutions_path: String,
+    skips_path: String,
 }
 
 impl MetricsLogger {
@@ -102,6 +103,7 @@ impl MetricsLogger {
         Ok(Self {
             trades_path: format!("{}/trades.jsonl", data_dir),
             resolutions_path: format!("{}/resolutions.jsonl", data_dir),
+            skips_path: format!("{}/skip_reasons.jsonl", data_dir),
         })
     }
 
@@ -121,6 +123,14 @@ impl MetricsLogger {
         self.append_line(&self.resolutions_path, &json)
     }
 
+    /// Log a skipped-trade decision reason.
+    pub fn log_skip(&self, record: &SkipRecord) -> Result<()> {
+        let json = serde_json::to_string(record)
+            .context("failed to serialize skip record")?;
+
+        self.append_line(&self.skips_path, &json)
+    }
+
     /// Append a line to a file (creates if doesn't exist).
     fn append_line(&self, path: &str, line: &str) -> Result<()> {
         let mut file = OpenOptions::new()
@@ -133,6 +143,39 @@ impl MetricsLogger {
             .with_context(|| format!("failed to write to file: {}", path))?;
 
         Ok(())
+    }
+}
+
+/// Why a market was skipped in a cycle.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkipRecord {
+    pub timestamp: DateTime<Utc>,
+    pub condition_id: String,
+    pub asset: String,
+    pub duration: String,
+    pub question: String,
+    pub reason: String,
+    pub details: Option<String>,
+}
+
+impl SkipRecord {
+    pub fn new(
+        condition_id: String,
+        asset: String,
+        duration: String,
+        question: String,
+        reason: impl Into<String>,
+        details: Option<String>,
+    ) -> Self {
+        Self {
+            timestamp: Utc::now(),
+            condition_id,
+            asset,
+            duration,
+            question,
+            reason: reason.into(),
+            details,
+        }
     }
 }
 

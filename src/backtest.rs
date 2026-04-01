@@ -179,6 +179,7 @@ pub fn run_backtest(
             signal.confidence,
             balance,
             config.max_position_pct,
+            rust_decimal_macros::dec!(5),
         );
 
         if size_usdc <= Decimal::ZERO {

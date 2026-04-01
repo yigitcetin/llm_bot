@@ -52,24 +52,23 @@ pub fn kelly_size(
     confidence: Decimal,
     balance: Decimal,
     max_position_pct: Decimal,
+    min_order_usdc: Decimal,   // yeni parametre
 ) -> Decimal {
     if balance <= Decimal::ZERO || edge <= Decimal::ZERO {
         return Decimal::ZERO;
     }
 
-    // Simplified Kelly: f = edge (fractional edge as capital fraction)
-    // Half-Kelly * confidence scaling
     let kelly = edge * dec!(0.5) * confidence;
-
-    // Cap at max_position_pct
     let fraction = kelly.min(max_position_pct);
 
-    // Minimum meaningful fraction
     if fraction < dec!(0.005) {
         return Decimal::ZERO;
     }
 
-    (balance * fraction).round_dp(2)
+    let size = (balance * fraction).round_dp(2);
+    
+    // Minimum order garantisi
+    size.max(min_order_usdc)
 }
 
 #[cfg(test)]

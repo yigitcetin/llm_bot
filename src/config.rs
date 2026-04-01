@@ -434,9 +434,9 @@ impl AppConfig {
             );
         }
 
-        if self.initial_balance < dec!(50) {
+        if self.initial_balance < dec!(1) {
             anyhow::bail!(
-                "INITIAL_BALANCE too low for meaningful trading (min $50), got: {}",
+                "INITIAL_BALANCE too low, got: {}",
                 self.initial_balance
             );
         }
