@@ -205,29 +205,33 @@ fn calculate_avg_volume(candles: &[Candle], period: usize) -> f64 {
 }
 
 /// Tek oy: RSI + 5m momentum + 15m momentum (aynı fiyat türevinin tekrarlı oylaması değil).
+/// Thresholds come from [`SignalConfig`] (plan P2: calibrated for short horizons).
 fn cluster_vote_rsi_momentum(
     rsi: f64,
     momentum_5m: f64,
     momentum_15m: f64,
+    cfg: &SignalConfig,
 ) -> Option<SignalDirection> {
     let mut up = 0u32;
     let mut down = 0u32;
 
-    if rsi < 30.0 {
+    if rsi < cfg.cluster_rsi_oversold {
         up += 1;
-    } else if rsi > 70.0 {
+    } else if rsi > cfg.cluster_rsi_overbought {
         down += 1;
     }
 
-    if momentum_5m > 0.01 {
+    let m5 = cfg.cluster_mom5_abs;
+    if momentum_5m > m5 {
         up += 1;
-    } else if momentum_5m < -0.01 {
+    } else if momentum_5m < -m5 {
         down += 1;
     }
 
-    if momentum_15m > 0.015 {
+    let m15 = cfg.cluster_mom15_abs;
+    if momentum_15m > m15 {
         up += 1;
-    } else if momentum_15m < -0.015 {
+    } else if momentum_15m < -m15 {
         down += 1;
     }
 
@@ -250,7 +254,16 @@ pub fn generate_signal(candles: &[Candle], config: &SignalConfig) -> SignalResul
     }
 
     let avg_bars = config.volume_avg_bars.max(5);
-    let volume_ratio = compute_volume_ratio(candles, avg_bars);
+    // P3: optional use of **closed** candles only for volume ratio (excludes the open bar).
+    let candles_for_volume: &[Candle] = if config.volume_use_closed_candle_only && candles.len() > 1 {
+        &candles[..candles.len() - 1]
+    } else {
+        candles
+    };
+    if candles_for_volume.len() < avg_bars + 1 {
+        return Err(SignalError::NoClearSignal);
+    }
+    let volume_ratio = compute_volume_ratio(candles_for_volume, avg_bars);
 
     if let Some(min_r) = config.volume_min_ratio {
         if volume_ratio < min_r {
@@ -283,7 +296,7 @@ pub fn generate_signal(candles: &[Candle], config: &SignalConfig) -> SignalResul
         return Err(SignalError::NoClearSignal);
     };
 
-    let cluster_dir = cluster_vote_rsi_momentum(rsi, momentum_5m, momentum_15m);
+    let cluster_dir = cluster_vote_rsi_momentum(rsi, momentum_5m, momentum_15m, config);
 
     let direction = match cluster_dir {
         None => macd_dir,
@@ -380,6 +393,16 @@ pub struct SignalConfig {
     pub volume_min_ratio: Option<f64>,
     /// `volume_ratio` ortalaması için mum sayısı (varsayılan 20).
     pub volume_avg_bars: usize,
+    /// Use `candles[..-1]` for volume ratio so the in-progress bar does not veto signals (plan P3).
+    pub volume_use_closed_candle_only: bool,
+    /// Cluster vote: RSI below this → UP vote (oversold).
+    pub cluster_rsi_oversold: f64,
+    /// Cluster vote: RSI above this → DOWN vote (overbought).
+    pub cluster_rsi_overbought: f64,
+    /// Absolute 5m momentum threshold (rate of change) for cluster vote.
+    pub cluster_mom5_abs: f64,
+    /// Absolute 15m momentum threshold for cluster vote.
+    pub cluster_mom15_abs: f64,
 }
 
 impl Default for SignalConfig {
@@ -391,6 +414,11 @@ impl Default for SignalConfig {
             macd_signal: 9,
             volume_min_ratio: None,
             volume_avg_bars: 20,
+            volume_use_closed_candle_only: true,
+            cluster_rsi_oversold: 40.0,
+            cluster_rsi_overbought: 60.0,
+            cluster_mom5_abs: 0.003,
+            cluster_mom15_abs: 0.005,
         }
     }
 }

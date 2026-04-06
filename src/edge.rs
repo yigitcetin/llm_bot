@@ -41,18 +41,12 @@ pub fn calculate(
     })
 }
 
-/// Half-Kelly position sizing.
-///
-/// Kelly fraction = edge / (1 - token_price)
-/// We use half-Kelly for safety, capped at max_position_pct of balance.
-///
-/// Returns USDC amount to spend.
-pub fn kelly_size(
+/// Raw half-Kelly USDC size before `min_order_usdc` floor (used by [`kelly_size_with_caps`]).
+pub fn kelly_size_raw(
     edge: Decimal,
     confidence: Decimal,
     balance: Decimal,
     max_position_pct: Decimal,
-    min_order_usdc: Decimal,   // yeni parametre
 ) -> Decimal {
     if balance <= Decimal::ZERO || edge <= Decimal::ZERO {
         return Decimal::ZERO;
@@ -65,9 +59,57 @@ pub fn kelly_size(
         return Decimal::ZERO;
     }
 
-    let size = (balance * fraction).round_dp(2);
-    
+    (balance * fraction).round_dp(2)
+}
+
+/// Half-Kelly position sizing.
+///
+/// Kelly fraction = edge / (1 - token_price)
+/// We use half-Kelly for safety, capped at max_position_pct of balance.
+///
+/// Returns USDC amount to spend.
+pub fn kelly_size(
+    edge: Decimal,
+    confidence: Decimal,
+    balance: Decimal,
+    max_position_pct: Decimal,
+    min_order_usdc: Decimal,
+) -> Decimal {
+    let size = kelly_size_raw(edge, confidence, balance, max_position_pct);
+    if size <= Decimal::ZERO {
+        return Decimal::ZERO;
+    }
     // Minimum order garantisi
+    size.max(min_order_usdc)
+}
+
+/// Half-Kelly with **cheap token** and **hard** USDC caps (plan P1/P4).
+///
+/// Caps apply to the raw Kelly size, then the minimum order floor is applied.
+/// If the floor would exceed `cheap_max_usdc` in a cheap market, the caller should skip.
+pub fn kelly_size_with_caps(
+    edge: Decimal,
+    confidence: Decimal,
+    balance: Decimal,
+    max_position_pct: Decimal,
+    min_order_usdc: Decimal,
+    token_price: Decimal,
+    cheap_threshold: Decimal,
+    cheap_max_usdc: Decimal,
+    hard_cap: Option<Decimal>,
+) -> Decimal {
+    let mut size = kelly_size_raw(edge, confidence, balance, max_position_pct);
+    if size <= Decimal::ZERO {
+        return Decimal::ZERO;
+    }
+    if token_price > Decimal::ZERO && token_price < cheap_threshold {
+        size = size.min(cheap_max_usdc);
+    }
+    if let Some(cap) = hard_cap {
+        if cap > Decimal::ZERO {
+            size = size.min(cap);
+        }
+    }
     size.max(min_order_usdc)
 }
 
@@ -168,6 +210,40 @@ mod tests {
         // Half-Kelly should be ~50% of full Kelly
         assert!(size_half < size_full);
         assert!(size_half > Decimal::ZERO);
+    }
+
+    #[test]
+    fn kelly_size_with_caps_limits_cheap_token() {
+        // Large raw Kelly, but cheap token → cap at cheap_max
+        let capped = kelly_size_with_caps(
+            dec!(0.40),
+            dec!(1.0),
+            dec!(1000),
+            dec!(0.50),
+            dec!(5),
+            dec!(0.05),
+            dec!(0.15),
+            dec!(5),
+            None,
+        );
+        assert_eq!(capped, dec!(5));
+    }
+
+    #[test]
+    fn kelly_size_with_caps_hard_limit() {
+        let capped = kelly_size_with_caps(
+            dec!(0.50),
+            dec!(1.0),
+            dec!(10000),
+            dec!(0.50),
+            dec!(5),
+            dec!(0.50),
+            dec!(0.15),
+            dec!(5),
+            Some(dec!(25)),
+        );
+        assert!(capped <= dec!(25));
+        assert!(capped >= dec!(5));
     }
 
     #[test]

@@ -22,3 +22,5 @@ pub mod trading_loop;
 pub mod metrics;
 pub mod resolution_checker;
 pub mod adaptive;
+pub mod backtest;
+pub mod signal_extensions;

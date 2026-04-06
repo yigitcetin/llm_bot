@@ -67,6 +67,27 @@ pub struct AppConfig {
     /// Nudge `min_edge` / `min_confidence` from recent resolved trades.
     pub adaptive_thresholds: bool,
     pub adaptive_trade_window: usize,
+
+    /// Skip markets that resolve sooner than this (seconds). `None` = off.
+    pub min_secs_to_close: Option<i64>,
+    /// Blend probability toward 0.5 in the last N seconds of the window. `None` = off.
+    pub expiry_dampen_last_secs: Option<i64>,
+    /// Reject if Gamma YES mid &lt; this (illiquid / mispriced tail). `None` = off.
+    pub min_market_yes_price: Option<Decimal>,
+    /// Reject if Gamma YES mid &gt; this. `None` = off.
+    pub max_market_yes_price: Option<Decimal>,
+    /// Token price below this → position USDC capped (see `cheap_token_max_usdc`).
+    pub cheap_token_price_threshold: Decimal,
+    pub cheap_token_max_usdc: Decimal,
+    /// Hard cap on any single order (USDC). `None` = off.
+    pub large_order_usdc_hard_cap: Option<Decimal>,
+    /// Use prior closed candle for volume ratio (avoids partial-bar low volume).
+    pub volume_use_closed_candle_only: bool,
+    /// RSI cluster thresholds (plan P2).
+    pub cluster_rsi_oversold: f64,
+    pub cluster_rsi_overbought: f64,
+    pub cluster_mom5_abs: f64,
+    pub cluster_mom15_abs: f64,
 }
 
 /// Polymarket signature types
@@ -109,6 +130,19 @@ pub struct AssetStrategy {
 
     pub adaptive_thresholds: bool,
     pub adaptive_trade_window: usize,
+
+    pub min_secs_to_close: Option<i64>,
+    pub expiry_dampen_last_secs: Option<i64>,
+    pub min_market_yes_price: Option<Decimal>,
+    pub max_market_yes_price: Option<Decimal>,
+    pub cheap_token_price_threshold: Decimal,
+    pub cheap_token_max_usdc: Decimal,
+    pub large_order_usdc_hard_cap: Option<Decimal>,
+    pub volume_use_closed_candle_only: bool,
+    pub cluster_rsi_oversold: f64,
+    pub cluster_rsi_overbought: f64,
+    pub cluster_mom5_abs: f64,
+    pub cluster_mom15_abs: f64,
 }
 
 impl AssetStrategy {
@@ -120,6 +154,11 @@ impl AssetStrategy {
             macd_signal: self.macd_signal,
             volume_min_ratio: self.volume_min_ratio,
             volume_avg_bars: self.volume_avg_bars.max(5),
+            volume_use_closed_candle_only: self.volume_use_closed_candle_only,
+            cluster_rsi_oversold: self.cluster_rsi_oversold,
+            cluster_rsi_overbought: self.cluster_rsi_overbought,
+            cluster_mom5_abs: self.cluster_mom5_abs,
+            cluster_mom15_abs: self.cluster_mom15_abs,
         }
     }
 
@@ -178,6 +217,51 @@ impl AssetStrategy {
                 self.volume_avg_bars
             );
         }
+        if self.cluster_rsi_oversold <= 0.0 || self.cluster_rsi_oversold >= 50.0 {
+            anyhow::bail!(
+                "CLUSTER_RSI_OVERSOLD_* should be in (0, 50), got: {}",
+                self.cluster_rsi_oversold
+            );
+        }
+        if self.cluster_rsi_overbought <= 50.0 || self.cluster_rsi_overbought >= 100.0 {
+            anyhow::bail!(
+                "CLUSTER_RSI_OVERBOUGHT_* should be in (50, 100), got: {}",
+                self.cluster_rsi_overbought
+            );
+        }
+        if self.cluster_rsi_oversold >= self.cluster_rsi_overbought {
+            anyhow::bail!(
+                "CLUSTER_RSI_OVERSOLD_* ({}) must be < CLUSTER_RSI_OVERBOUGHT_* ({})",
+                self.cluster_rsi_oversold,
+                self.cluster_rsi_overbought
+            );
+        }
+        if self.cluster_mom5_abs <= 0.0 || self.cluster_mom5_abs > 0.2 {
+            anyhow::bail!(
+                "CLUSTER_MOM5_ABS_* out of range (0, 0.2], got: {}",
+                self.cluster_mom5_abs
+            );
+        }
+        if self.cluster_mom15_abs <= 0.0 || self.cluster_mom15_abs > 0.2 {
+            anyhow::bail!(
+                "CLUSTER_MOM15_ABS_* out of range (0, 0.2], got: {}",
+                self.cluster_mom15_abs
+            );
+        }
+        if self.cheap_token_price_threshold <= Decimal::ZERO
+            || self.cheap_token_price_threshold >= dec!(1)
+        {
+            anyhow::bail!(
+                "CHEAP_TOKEN_PRICE_THRESHOLD_* invalid: {}",
+                self.cheap_token_price_threshold
+            );
+        }
+        if self.cheap_token_max_usdc < dec!(1) {
+            anyhow::bail!(
+                "CHEAP_TOKEN_MAX_USDC_* too low: {}",
+                self.cheap_token_max_usdc
+            );
+        }
         self.volatility_filter.validate()?;
         Ok(())
     }
@@ -226,6 +310,71 @@ fn env_override_bool(key: &str, asset_upper: &str, fallback: bool) -> bool {
         .unwrap_or(fallback)
 }
 
+fn env_opt_i64(key: &str) -> Option<i64> {
+    std::env::var(key)
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .and_then(|v| v.parse().ok())
+}
+
+fn env_opt_decimal(key: &str) -> Option<Decimal> {
+    std::env::var(key)
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .and_then(|v| v.parse().ok())
+}
+
+/// Default `true` when unset (plan P3: closed-candle volume by default).
+fn env_bool_or_default(key: &str, default: bool) -> bool {
+    std::env::var(key)
+        .map(|v| {
+            matches!(
+                v.to_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(default)
+}
+
+fn env_override_opt_i64(key: &str, asset_upper: &str, fallback: Option<i64>) -> Option<i64> {
+    let k = format!("{key}_{asset_upper}");
+    std::env::var(&k)
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .and_then(|v| v.parse().ok())
+        .or_else(|| {
+            std::env::var(key)
+                .ok()
+                .filter(|s| !s.trim().is_empty())
+                .and_then(|v| v.parse().ok())
+        })
+        .or(fallback)
+}
+
+fn env_override_opt_decimal(key: &str, asset_upper: &str, fallback: Option<Decimal>) -> Option<Decimal> {
+    let k = format!("{key}_{asset_upper}");
+    std::env::var(&k)
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .and_then(|v| v.parse().ok())
+        .or_else(|| {
+            std::env::var(key)
+                .ok()
+                .filter(|s| !s.trim().is_empty())
+                .and_then(|v| v.parse().ok())
+        })
+        .or(fallback)
+}
+
+fn env_override_f64(key: &str, asset_upper: &str, fallback: f64) -> f64 {
+    let k = format!("{key}_{asset_upper}");
+    std::env::var(&k)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .or_else(|| std::env::var(key).ok().and_then(|v| v.parse().ok()))
+        .unwrap_or(fallback)
+}
+
 /// `VOL_MIN_STD_PCT_BTC` sonra global `VOL_MIN_STD_PCT`.
 fn env_vol_std_opt(prefix: &str, asset_upper: &str) -> Option<Decimal> {
     let k = format!("{prefix}_{asset_upper}");
@@ -256,7 +405,7 @@ impl AppConfig {
                 .collect(),
 
             durations: std::env::var("DURATIONS")
-                .unwrap_or_else(|_| "5m".to_string())
+                .unwrap_or_else(|_| "5m,15m".to_string())
                 .split(',')
                 .map(|s| s.trim().to_string())
                 .collect(),
@@ -400,6 +549,37 @@ impl AppConfig {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(50),
+
+            min_secs_to_close: env_opt_i64("MIN_SECS_TO_CLOSE"),
+            expiry_dampen_last_secs: env_opt_i64("EXPIRY_DAMPEN_LAST_SECS"),
+            min_market_yes_price: env_opt_decimal("MIN_MARKET_YES_PRICE"),
+            max_market_yes_price: env_opt_decimal("MAX_MARKET_YES_PRICE"),
+            cheap_token_price_threshold: std::env::var("CHEAP_TOKEN_PRICE_THRESHOLD")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(dec!(0.15)),
+            cheap_token_max_usdc: std::env::var("CHEAP_TOKEN_MAX_USDC")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(dec!(5)),
+            large_order_usdc_hard_cap: env_opt_decimal("LARGE_ORDER_USDC_HARD_CAP"),
+            volume_use_closed_candle_only: env_bool_or_default("VOLUME_USE_CLOSED_CANDLE_ONLY", true),
+            cluster_rsi_oversold: std::env::var("CLUSTER_RSI_OVERSOLD")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(40.0),
+            cluster_rsi_overbought: std::env::var("CLUSTER_RSI_OVERBOUGHT")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(60.0),
+            cluster_mom5_abs: std::env::var("CLUSTER_MOM5_ABS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0.003),
+            cluster_mom15_abs: std::env::var("CLUSTER_MOM15_ABS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0.005),
         };
 
         // Validate configuration before returning
@@ -462,6 +642,51 @@ impl AppConfig {
                 &su,
                 self.adaptive_trade_window,
             ),
+
+            min_secs_to_close: env_override_opt_i64("MIN_SECS_TO_CLOSE", &su, self.min_secs_to_close),
+            expiry_dampen_last_secs: env_override_opt_i64(
+                "EXPIRY_DAMPEN_LAST_SECS",
+                &su,
+                self.expiry_dampen_last_secs,
+            ),
+            min_market_yes_price: env_override_opt_decimal(
+                "MIN_MARKET_YES_PRICE",
+                &su,
+                self.min_market_yes_price,
+            ),
+            max_market_yes_price: env_override_opt_decimal(
+                "MAX_MARKET_YES_PRICE",
+                &su,
+                self.max_market_yes_price,
+            ),
+            cheap_token_price_threshold: env_override_decimal(
+                "CHEAP_TOKEN_PRICE_THRESHOLD",
+                &su,
+                self.cheap_token_price_threshold,
+            ),
+            cheap_token_max_usdc: env_override_decimal(
+                "CHEAP_TOKEN_MAX_USDC",
+                &su,
+                self.cheap_token_max_usdc,
+            ),
+            large_order_usdc_hard_cap: env_override_opt_decimal(
+                "LARGE_ORDER_USDC_HARD_CAP",
+                &su,
+                self.large_order_usdc_hard_cap,
+            ),
+            volume_use_closed_candle_only: env_override_bool(
+                "VOLUME_USE_CLOSED_CANDLE_ONLY",
+                &su,
+                self.volume_use_closed_candle_only,
+            ),
+            cluster_rsi_oversold: env_override_f64("CLUSTER_RSI_OVERSOLD", &su, self.cluster_rsi_oversold),
+            cluster_rsi_overbought: env_override_f64(
+                "CLUSTER_RSI_OVERBOUGHT",
+                &su,
+                self.cluster_rsi_overbought,
+            ),
+            cluster_mom5_abs: env_override_f64("CLUSTER_MOM5_ABS", &su, self.cluster_mom5_abs),
+            cluster_mom15_abs: env_override_f64("CLUSTER_MOM15_ABS", &su, self.cluster_mom15_abs),
         }
     }
 
@@ -519,6 +744,16 @@ impl AppConfig {
             anyhow::bail!("DURATIONS cannot be empty");
         }
 
+        if let (Some(lo), Some(hi)) = (self.min_market_yes_price, self.max_market_yes_price) {
+            if lo >= hi {
+                anyhow::bail!(
+                    "MIN_MARKET_YES_PRICE ({}) must be < MAX_MARKET_YES_PRICE ({})",
+                    lo,
+                    hi
+                );
+            }
+        }
+
         self.validate_polymarket_auth()?;
 
         Ok(())
@@ -546,7 +781,7 @@ impl Default for AppConfig {
         Self {
             polymarket_private_key: String::new(),
             assets: vec!["btc".to_string(), "eth".to_string()],
-            durations: vec!["5m".to_string()],
+            durations: vec!["5m".to_string(), "15m".to_string()],
             min_edge: dec!(0.06),
             min_confidence: dec!(0.70),
             min_order_usdc: dec!(5),
@@ -580,6 +815,19 @@ impl Default for AppConfig {
             htf_ema_period: 20,
             adaptive_thresholds: false,
             adaptive_trade_window: 50,
+
+            min_secs_to_close: None,
+            expiry_dampen_last_secs: None,
+            min_market_yes_price: None,
+            max_market_yes_price: None,
+            cheap_token_price_threshold: dec!(0.15),
+            cheap_token_max_usdc: dec!(5),
+            large_order_usdc_hard_cap: None,
+            volume_use_closed_candle_only: true,
+            cluster_rsi_oversold: 40.0,
+            cluster_rsi_overbought: 60.0,
+            cluster_mom5_abs: 0.003,
+            cluster_mom15_abs: 0.005,
         }
     }
 }

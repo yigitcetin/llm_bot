@@ -147,49 +147,14 @@ impl RiskManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{AppConfig, SignatureType};
+    use crate::config::AppConfig;
     use crate::types::Direction;
     use rust_decimal_macros::dec;
 
     fn test_cfg() -> AppConfig {
-        AppConfig {
-            polymarket_private_key: "test".to_string(),
-            assets: vec!["btc".to_string()],
-            durations: vec!["5m".to_string()],
-            min_edge: dec!(0.06),
-            min_confidence: dec!(0.70),
-            min_order_usdc: dec!(5),
-            spot_exchange: "binance".to_string(),
-            candle_interval: "1m".to_string(),
-            candle_lookback: 100,
-            rsi_period: 14,
-            macd_fast: 12,
-            macd_slow: 26,
-            macd_signal: 9,
-            volume_min_ratio: None,
-            volume_avg_bars: 20,
-            max_position_pct: dec!(0.05),
-            daily_loss_limit_pct: dec!(0.10),
-            initial_balance: dec!(200),
-            dry_run: true,
-            cycle_secs: 60,
-            gamma_tag_id: crate::constants::GAMMA_TAG_ID_DEFAULT,
-            clob_host: "https://clob.polymarket.com".to_string(),
-            chain_id: 137,
-            signature_type: SignatureType::Eoa,
-            funder_address: None,
-            builder_api_key: None,
-            builder_api_secret: None,
-            builder_api_passphrase: None,
-
-            data_dir: "data".to_string(),
-            htf_enabled: false,
-            htf_interval: "15m".to_string(),
-            htf_lookback: 50,
-            htf_ema_period: 20,
-            adaptive_thresholds: false,
-            adaptive_trade_window: 50,
-        }
+        let mut c = AppConfig::default();
+        c.polymarket_private_key = "test".to_string();
+        c
     }
 
     #[test]

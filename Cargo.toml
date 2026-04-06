@@ -12,6 +12,10 @@ path = "src/lib.rs"
 name = "stats"
 path = "src/bin/stats.rs"
 
+[[bin]]
+name = "backtest"
+path = "src/bin/backtest.rs"
+
 [dependencies]
 # Async runtime
 tokio = { version = "1", features = ["full"] }

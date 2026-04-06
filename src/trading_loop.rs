@@ -15,6 +15,9 @@ use crate::market_matcher;
 use crate::metrics::{MetricsLogger, OrderFailureRecord, SkipRecord, TradeRecord};
 use crate::prometheus_export;
 use crate::risk::{RiskManager, TradeBlockReason};
+use crate::signal_extensions::{
+    apply_market_timing_to_signal, below_min_secs_to_close, parse_duration_to_secs,
+};
 use crate::signals::{compute_volume_ratio, higher_timeframe_aligns};
 use crate::spot_price::SpotPriceClient;
 use crate::types::{Market, OpenPosition};
@@ -86,6 +89,60 @@ pub async fn run_cycle(
             continue;
         }
 
+        if let Some(lo) = st.min_market_yes_price {
+            if market.yes_price < lo {
+                log_skip_decision(
+                    logger,
+                    &market,
+                    "market_yes_price_out_of_band",
+                    Some(format!(
+                        "yes_price={}, min_yes_price={}",
+                        market.yes_price, lo
+                    )),
+                );
+                info!(
+                    condition_id = %market.condition_id,
+                    yes_price = %market.yes_price,
+                    "skip: YES price below minimum band"
+                );
+                continue;
+            }
+        }
+        if let Some(hi) = st.max_market_yes_price {
+            if market.yes_price > hi {
+                log_skip_decision(
+                    logger,
+                    &market,
+                    "market_yes_price_out_of_band",
+                    Some(format!(
+                        "yes_price={}, max_yes_price={}",
+                        market.yes_price, hi
+                    )),
+                );
+                info!(
+                    condition_id = %market.condition_id,
+                    yes_price = %market.yes_price,
+                    "skip: YES price above maximum band"
+                );
+                continue;
+            }
+        }
+
+        if below_min_secs_to_close(&market, st.min_secs_to_close) {
+            log_skip_decision(
+                logger,
+                &market,
+                "too_close_to_expiry",
+                st.min_secs_to_close
+                    .map(|m| format!("secs_to_close={}, min_secs={}", market.secs_to_close(), m)),
+            );
+            info!(
+                condition_id = %market.condition_id,
+                "skip: too close to market expiry"
+            );
+            continue;
+        }
+
         let candles = spot
             .fetch_candles_at_exchange(
                 &market.asset,
@@ -112,7 +169,7 @@ pub async fn run_cycle(
             continue;
         }
 
-        let signal = match indicator_cache.get_or_compute(
+        let signal_arc = match indicator_cache.get_or_compute(
             &market.asset,
             &st.candle_interval,
             &candles,
@@ -122,7 +179,13 @@ pub async fn run_cycle(
             Err(e) => {
                 let msg = e.to_string();
                 if msg.contains("volume below") {
-                    let vr = compute_volume_ratio(&candles, signal_config.volume_avg_bars.max(5));
+                    let vol_slice: &[crate::spot_price::Candle] =
+                        if signal_config.volume_use_closed_candle_only && candles.len() > 1 {
+                            &candles[..candles.len() - 1]
+                        } else {
+                            &candles
+                        };
+                    let vr = compute_volume_ratio(vol_slice, signal_config.volume_avg_bars.max(5));
                     let detail = signal_config
                         .volume_min_ratio
                         .map(|v| format!("volume_ratio={:.4}, min_ratio={:.4}", vr, v))
@@ -155,6 +218,15 @@ pub async fn run_cycle(
                 continue;
             }
         };
+
+        let window_secs = parse_duration_to_secs(&market.duration);
+        let mut signal = (*signal_arc).clone();
+        signal = apply_market_timing_to_signal(
+            signal,
+            &market,
+            window_secs,
+            st.expiry_dampen_last_secs,
+        );
 
         if !passes_volatility_filter(&candles, &st.volatility_filter) {
             let vol_detail = compute_return_std_pct(&candles, st.volatility_filter.sample_bars)
@@ -252,7 +324,7 @@ pub async fn run_cycle(
             continue;
         }
 
-        let direction = match market_matcher::match_signal_to_market(signal.as_ref(), &market) {
+        let direction = match market_matcher::match_signal_to_market(&signal, &market) {
             Some(dir) => dir,
             None => {
                 log_skip_decision(
@@ -304,12 +376,16 @@ pub async fn run_cycle(
         trade.direction = direction;
 
         let balance = risk.available_balance();
-        let size_usdc = edge::kelly_size(
+        let size_usdc = edge::kelly_size_with_caps(
             trade.edge,
             signal.confidence,
             balance,
             st.max_position_pct,
             st.min_order_usdc,
+            trade.token_price,
+            st.cheap_token_price_threshold,
+            st.cheap_token_max_usdc,
+            st.large_order_usdc_hard_cap,
         );
 
         if size_usdc < st.min_order_usdc {
