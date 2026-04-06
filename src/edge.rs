@@ -59,7 +59,10 @@ pub fn kelly_size_raw(
         return Decimal::ZERO;
     }
 
-    (balance * fraction).round_dp(2)
+    // `round_dp(2)` can round slightly above `balance * max_position_pct`; RiskManager rejects that.
+    let rounded = (balance * fraction).round_dp(2);
+    let ceiling = balance * max_position_pct;
+    rounded.min(ceiling)
 }
 
 /// Half-Kelly position sizing.
@@ -79,8 +82,9 @@ pub fn kelly_size(
     if size <= Decimal::ZERO {
         return Decimal::ZERO;
     }
-    // Minimum order garantisi
-    size.max(min_order_usdc)
+    let ceiling = balance * max_position_pct;
+    // Minimum order floor, then hard ceiling (same as RiskManager).
+    size.max(min_order_usdc).min(ceiling)
 }
 
 /// Result of [`kelly_size_with_caps_detail`] for JSONL / analytics.
@@ -177,9 +181,16 @@ pub fn kelly_size_with_caps_detail(
     }
 
     let before_floor = size;
-    let final_size = size.max(min_order_usdc);
+    let mut final_size = size.max(min_order_usdc);
     if final_size > before_floor {
         cap_hit = "min_order";
+    }
+
+    // Min-order floor can exceed `balance * max_position_pct` in edge cases; align with RiskManager.
+    let hard_ceiling = balance * max_position_pct;
+    if final_size > hard_ceiling {
+        final_size = hard_ceiling;
+        cap_hit = "max_position";
     }
 
     KellySizingResult {
@@ -219,6 +230,22 @@ mod tests {
         // Very high edge should still be capped
         let size = kelly_size(dec!(0.50), dec!(1.0), dec!(1000), dec!(0.05), dec!(5));
         assert!(size <= dec!(50), "should be capped at 5% = $50");
+    }
+
+    #[test]
+    fn kelly_size_raw_rounding_never_exceeds_balance_times_max_pct() {
+        // Fraction at max_position_pct: rounded USDC must stay <= balance * max_pct (RiskManager uses exact product).
+        let balance = dec!(310.59);
+        let max_pct = dec!(0.03);
+        let ceiling = balance * max_pct;
+        let size = kelly_size_raw(dec!(0.20), dec!(1.0), balance, max_pct);
+        assert!(size > Decimal::ZERO);
+        assert!(
+            size <= ceiling,
+            "rounded Kelly must not exceed RiskManager ceiling: size={} ceiling={}",
+            size,
+            ceiling
+        );
     }
 
     #[test]

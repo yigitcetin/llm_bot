@@ -62,3 +62,158 @@ fn trade_won(t: &TradeRecord) -> bool {
         _ => false,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::io::Write;
+
+    use crate::metrics::TradeRecord;
+    use crate::types::Direction;
+    use rust_decimal_macros::dec;
+    use uuid::Uuid;
+
+    fn sample_row(asset: &str, direction: Direction, outcome: bool) -> TradeRecord {
+        let mut r = TradeRecord::new(
+            format!("c_{}", Uuid::new_v4()),
+            asset.to_string(),
+            "15m".to_string(),
+            direction,
+            dec!(0.5),
+            dec!(5),
+            dec!(10),
+            dec!(0.6),
+            dec!(0.8),
+            dec!(0.1),
+            "r".to_string(),
+            format!("o_{}", Uuid::new_v4()),
+        );
+        r.outcome = Some(outcome);
+        r
+    }
+
+    fn write_jsonl(path: &std::path::Path, rows: &[TradeRecord]) {
+        let mut f = fs::File::create(path).expect("create temp trades");
+        for tr in rows {
+            writeln!(f, "{}", serde_json::to_string(tr).unwrap()).unwrap();
+        }
+    }
+
+    #[test]
+    fn effective_thresholds_disabled_returns_base() {
+        let dir = std::env::temp_dir().join(format!("adapt_{}", Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("t.jsonl");
+        write_jsonl(&p, &[]);
+        let (e, c) = effective_thresholds(
+            p.to_str().unwrap(),
+            "btc",
+            dec!(0.06),
+            dec!(0.70),
+            50,
+            false,
+        );
+        assert_eq!(e, dec!(0.06));
+        assert_eq!(c, dec!(0.70));
+    }
+
+    #[test]
+    fn effective_thresholds_window_below_five_returns_base() {
+        let dir = std::env::temp_dir().join(format!("adapt_{}", Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("t.jsonl");
+        let rows: Vec<_> = (0..5)
+            .map(|_| sample_row("btc", Direction::Yes, true))
+            .collect();
+        write_jsonl(&p, &rows);
+        let (e, c) = effective_thresholds(
+            p.to_str().unwrap(),
+            "btc",
+            dec!(0.06),
+            dec!(0.70),
+            4,
+            true,
+        );
+        assert_eq!(e, dec!(0.06));
+        assert_eq!(c, dec!(0.70));
+    }
+
+    #[test]
+    fn effective_thresholds_missing_file_returns_base() {
+        let (e, c) = effective_thresholds(
+            "/nonexistent/polymarket_adaptive_trades.jsonl",
+            "btc",
+            dec!(0.06),
+            dec!(0.70),
+            50,
+            true,
+        );
+        assert_eq!(e, dec!(0.06));
+        assert_eq!(c, dec!(0.70));
+    }
+
+    #[test]
+    fn effective_thresholds_high_win_rate_nudges_edge_down() {
+        let dir = std::env::temp_dir().join(format!("adapt_{}", Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("t.jsonl");
+        let rows: Vec<_> = (0..5)
+            .map(|_| sample_row("btc", Direction::Yes, true))
+            .collect();
+        write_jsonl(&p, &rows);
+        let (e, c) = effective_thresholds(
+            p.to_str().unwrap(),
+            "btc",
+            dec!(0.06),
+            dec!(0.70),
+            50,
+            true,
+        );
+        assert_eq!(e, dec!(0.055));
+        assert_eq!(c, dec!(0.68));
+    }
+
+    #[test]
+    fn effective_thresholds_low_win_rate_nudges_edge_up() {
+        let dir = std::env::temp_dir().join(format!("adapt_{}", Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("t.jsonl");
+        let rows: Vec<_> = (0..5)
+            .map(|_| sample_row("btc", Direction::Yes, false))
+            .collect();
+        write_jsonl(&p, &rows);
+        let (e, c) = effective_thresholds(
+            p.to_str().unwrap(),
+            "btc",
+            dec!(0.06),
+            dec!(0.70),
+            50,
+            true,
+        );
+        assert_eq!(e, dec!(0.07));
+        assert_eq!(c, dec!(0.72));
+    }
+
+    #[test]
+    fn effective_thresholds_ignores_other_assets() {
+        let dir = std::env::temp_dir().join(format!("adapt_{}", Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("t.jsonl");
+        let mut rows: Vec<_> = (0..5)
+            .map(|_| sample_row("eth", Direction::Yes, true))
+            .collect();
+        rows.extend((0..5).map(|_| sample_row("btc", Direction::Yes, false)));
+        write_jsonl(&p, &rows);
+        let (e, c) = effective_thresholds(
+            p.to_str().unwrap(),
+            "btc",
+            dec!(0.06),
+            dec!(0.70),
+            50,
+            true,
+        );
+        assert_eq!(e, dec!(0.07));
+        assert_eq!(c, dec!(0.72));
+    }
+}

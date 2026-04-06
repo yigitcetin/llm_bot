@@ -150,6 +150,14 @@ impl RiskManager {
 }
 
 #[cfg(test)]
+impl RiskManager {
+    /// Set calendar day for daily loss reset tests (`maybe_reset_daily`).
+    pub(super) fn set_last_reset_for_test(&mut self, d: chrono::NaiveDate) {
+        self.last_reset = d;
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::AppConfig;
@@ -197,5 +205,37 @@ mod tests {
         let mut rm = RiskManager::new(&test_cfg());
         rm.daily_loss = dec!(20);
         assert!(!rm.can_trade(dec!(5), "cid1", dec!(0.05)));
+    }
+
+    #[test]
+    fn record_resolution_loss_increments_daily_loss() {
+        let mut rm = RiskManager::new(&test_cfg());
+        let pos = OpenPosition {
+            condition_id: "cid1".to_string(),
+            order_id: "o1".to_string(),
+            direction: Direction::Yes,
+            entry_price: dec!(0.5),
+            size_usdc: dec!(10),
+            size_shares: dec!(20),
+            end_date_ms: 0,
+        };
+        rm.record_trade(dec!(10), pos.clone());
+        rm.record_resolution(&pos, dec!(-3));
+        assert_eq!(rm.daily_loss(), dec!(3));
+    }
+
+    #[test]
+    fn daily_loss_resets_on_new_calendar_day() {
+        let mut rm = RiskManager::new(&test_cfg());
+        rm.daily_loss = dec!(15);
+        rm.set_last_reset_for_test(
+            chrono::Utc::now()
+                .date_naive()
+                .pred_opt()
+                .expect("valid yesterday"),
+        );
+        assert_eq!(rm.daily_loss(), dec!(15));
+        assert!(rm.can_trade(dec!(5), "cid_new", dec!(0.05)));
+        assert_eq!(rm.daily_loss(), dec!(0));
     }
 }

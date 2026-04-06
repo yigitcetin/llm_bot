@@ -842,3 +842,96 @@ impl SignatureType {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rust_decimal_macros::dec;
+
+    fn valid_app_config() -> AppConfig {
+        let mut c = AppConfig::default();
+        c.polymarket_private_key =
+            "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string();
+        c
+    }
+
+    #[test]
+    fn app_config_validate_accepts_sensible_defaults() {
+        valid_app_config().validate().expect("default should validate");
+    }
+
+    #[test]
+    fn app_config_rejects_empty_assets() {
+        let mut c = valid_app_config();
+        c.assets = vec![];
+        assert!(c.validate().is_err());
+    }
+
+    #[test]
+    fn app_config_rejects_empty_durations() {
+        let mut c = valid_app_config();
+        c.durations = vec![];
+        assert!(c.validate().is_err());
+    }
+
+    #[test]
+    fn app_config_rejects_min_edge_non_positive() {
+        let mut c = valid_app_config();
+        c.min_edge = dec!(0);
+        assert!(c.validate().is_err());
+    }
+
+    #[test]
+    fn app_config_rejects_min_edge_above_half() {
+        let mut c = valid_app_config();
+        c.min_edge = dec!(0.51);
+        assert!(c.validate().is_err());
+    }
+
+    #[test]
+    fn app_config_rejects_min_confidence_below_half() {
+        let mut c = valid_app_config();
+        c.min_confidence = dec!(0.49);
+        assert!(c.validate().is_err());
+    }
+
+    #[test]
+    fn app_config_rejects_yes_price_band_inverted() {
+        let mut c = valid_app_config();
+        c.min_market_yes_price = Some(dec!(0.6));
+        c.max_market_yes_price = Some(dec!(0.5));
+        assert!(c.validate().is_err());
+    }
+
+    #[test]
+    fn app_config_rejects_eoa_with_funder() {
+        let mut c = valid_app_config();
+        c.signature_type = SignatureType::Eoa;
+        c.funder_address = Some("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string());
+        assert!(c.validate().is_err());
+    }
+
+    #[test]
+    fn asset_strategy_rejects_invalid_cluster_rsi_order() {
+        let mut st = valid_app_config().asset_strategy("btc");
+        st.cluster_rsi_oversold = 55.0;
+        st.cluster_rsi_overbought = 50.0;
+        assert!(st.validate().is_err());
+    }
+
+    #[test]
+    fn asset_strategy_rejects_macd_fast_gte_slow() {
+        let mut st = valid_app_config().asset_strategy("btc");
+        st.macd_fast = 20;
+        st.macd_slow = 12;
+        assert!(st.validate().is_err());
+    }
+
+    #[test]
+    fn asset_strategy_rejects_vol_min_gte_max() {
+        let mut st = valid_app_config().asset_strategy("btc");
+        st.volatility_filter.min_std_pct = Some(dec!(0.1));
+        st.volatility_filter.max_std_pct = Some(dec!(0.05));
+        assert!(st.validate().is_err());
+    }
+}
