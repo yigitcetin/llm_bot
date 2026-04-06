@@ -152,6 +152,10 @@ mod tests {
             probability: dec!(0.7),
             confidence: dec!(0.8),
             reasoning: "test".to_string(),
+            rsi: 50.0,
+            macd_histogram: 0.0,
+            volume_ratio: 1.0,
+            cluster_direction: "TIE".to_string(),
         }
     }
 

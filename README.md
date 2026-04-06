@@ -68,8 +68,10 @@ Varsayılan binary adı: `polymarket-llm-bot` (`Cargo.toml` içinde `default-run
 | Komut | Açıklama |
 |--------|----------|
 | `cargo run --release` | Ana bot döngüsü |
-| `cargo run --bin stats -- --data-dir data` | `trades.jsonl` üzerinde özet metrikler |
-| `cargo run --bin backtest -- data/trades.jsonl [iterasyon]` | Çözümlenmiş PnL üzerinde backtest özeti |
+| `cargo run --bin stats -- --data-dir data` | `trades.jsonl`: win rate, edge/confidence bucket, **RSI / vol / süre bucket’ları**, ortalama PnL |
+| `cargo run --bin backtest -- data/trades.jsonl [iterasyon]` | Monte Carlo + walk-forward; isteğe bağlı `--asset`, `--direction`, `--min-edge` / `--max-edge`, `--min-rsi` / `--max-rsi` ile alt küme |
+
+`trades.jsonl` satırlarına (yeni işlemlerde) RSI, MACD histogram, hacim oranı, küme yönü, Gamma YES fiyatı, likidite, kapanışa kalan süre, volatilite std, Kelly oranı, bakiye / günlük kayıp snapshot, HTF hizası, adaptif eşikler ve sizing cap bilgisi yazılır; eski satırlar bu alanlar olmadan da okunur.
 
 ## Gözlemlenebilirlik
 

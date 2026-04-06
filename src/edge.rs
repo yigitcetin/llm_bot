@@ -83,6 +83,22 @@ pub fn kelly_size(
     size.max(min_order_usdc)
 }
 
+/// Result of [`kelly_size_with_caps_detail`] for JSONL / analytics.
+#[derive(Debug, Clone)]
+pub struct KellySizingResult {
+    pub size_usdc: Decimal,
+    /// Half-Kelly fraction actually used: `min(edge * 0.5 * confidence, max_position_pct)`.
+    pub kelly_fraction: Decimal,
+    /// Which constraint dominated before resolution: `none`, `cheap_token`, `hard_cap`, `min_order`, `max_position`.
+    pub cap_hit: &'static str,
+}
+
+/// Half-Kelly fraction (before balance multiply), capped by `max_position_pct`.
+pub fn half_kelly_fraction(edge: Decimal, confidence: Decimal, max_position_pct: Decimal) -> Decimal {
+    let kelly = edge * dec!(0.5) * confidence;
+    kelly.min(max_position_pct)
+}
+
 /// Half-Kelly with **cheap token** and **hard** USDC caps (plan P1/P4).
 ///
 /// Caps apply to the raw Kelly size, then the minimum order floor is applied.
@@ -98,19 +114,79 @@ pub fn kelly_size_with_caps(
     cheap_max_usdc: Decimal,
     hard_cap: Option<Decimal>,
 ) -> Decimal {
-    let mut size = kelly_size_raw(edge, confidence, balance, max_position_pct);
-    if size <= Decimal::ZERO {
-        return Decimal::ZERO;
+    kelly_size_with_caps_detail(
+        edge,
+        confidence,
+        balance,
+        max_position_pct,
+        min_order_usdc,
+        token_price,
+        cheap_threshold,
+        cheap_max_usdc,
+        hard_cap,
+    )
+    .size_usdc
+}
+
+/// Same as [`kelly_size_with_caps`] but returns fraction and which cap applied (for trade logs).
+pub fn kelly_size_with_caps_detail(
+    edge: Decimal,
+    confidence: Decimal,
+    balance: Decimal,
+    max_position_pct: Decimal,
+    min_order_usdc: Decimal,
+    token_price: Decimal,
+    cheap_threshold: Decimal,
+    cheap_max_usdc: Decimal,
+    hard_cap: Option<Decimal>,
+) -> KellySizingResult {
+    let kelly_fraction = half_kelly_fraction(edge, confidence, max_position_pct);
+    let max_pct_hit = (edge * dec!(0.5) * confidence) > max_position_pct;
+
+    let raw = kelly_size_raw(edge, confidence, balance, max_position_pct);
+    if raw <= Decimal::ZERO {
+        return KellySizingResult {
+            size_usdc: Decimal::ZERO,
+            kelly_fraction,
+            cap_hit: if max_pct_hit { "max_position" } else { "none" },
+        };
     }
+
+    let mut size = raw;
+    let mut cap_hit: &'static str = if max_pct_hit {
+        "max_position"
+    } else {
+        "none"
+    };
+
     if token_price > Decimal::ZERO && token_price < cheap_threshold {
-        size = size.min(cheap_max_usdc);
+        let capped = size.min(cheap_max_usdc);
+        if capped < size {
+            cap_hit = "cheap_token";
+        }
+        size = capped;
     }
     if let Some(cap) = hard_cap {
         if cap > Decimal::ZERO {
-            size = size.min(cap);
+            let capped = size.min(cap);
+            if capped < size {
+                cap_hit = "hard_cap";
+            }
+            size = capped;
         }
     }
-    size.max(min_order_usdc)
+
+    let before_floor = size;
+    let final_size = size.max(min_order_usdc);
+    if final_size > before_floor {
+        cap_hit = "min_order";
+    }
+
+    KellySizingResult {
+        size_usdc: final_size,
+        kelly_fraction,
+        cap_hit,
+    }
 }
 
 #[cfg(test)]

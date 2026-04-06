@@ -100,6 +100,11 @@ impl RiskManager {
         self.balance
     }
 
+    /// Cumulative loss today (absolute USDC), reset at day boundary.
+    pub fn daily_loss(&self) -> Decimal {
+        self.daily_loss
+    }
+
     /// Call when an order is placed.
     pub fn record_trade(&mut self, size_usdc: Decimal, position: OpenPosition) {
         self.balance -= size_usdc;

@@ -9,11 +9,113 @@ use serde::Deserialize;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 
-/// One row from `trades.jsonl` with optional resolution.
+/// One row from `trades.jsonl` with optional resolution (extra fields ignored if absent in older JSONL).
 #[derive(Debug, Clone, Deserialize)]
 pub struct ResolvedTradeRow {
     #[serde(default)]
     pub pnl: Option<String>,
+    #[serde(default)]
+    pub outcome: Option<bool>,
+    #[serde(default)]
+    pub direction: Option<String>,
+    #[serde(default)]
+    pub edge: Option<String>,
+    #[serde(default)]
+    pub asset: Option<String>,
+    #[serde(default)]
+    pub rsi: Option<f64>,
+}
+
+/// Optional filters for subset Monte Carlo (all `None` = no filter).
+#[derive(Debug, Clone, Default)]
+pub struct TradeFilter {
+    pub asset: Option<String>,
+    /// `YES` or `NO`
+    pub direction: Option<String>,
+    pub min_edge: Option<f64>,
+    pub max_edge: Option<f64>,
+    pub min_rsi: Option<f64>,
+    pub max_rsi: Option<f64>,
+}
+
+impl TradeFilter {
+    /// Returns true if the row passes all set filters (resolved rows with `pnl` only).
+    pub fn matches(&self, row: &ResolvedTradeRow) -> bool {
+        if row.pnl.is_none() {
+            return false;
+        }
+        if let Some(ref a) = self.asset {
+            let row_a = row.asset.as_deref().unwrap_or("").trim().to_lowercase();
+            if row_a != a.trim().to_lowercase() {
+                return false;
+            }
+        }
+        if let Some(ref d) = self.direction {
+            let row_d = row.direction.as_deref().unwrap_or("").trim().to_uppercase();
+            if row_d != d.trim().to_uppercase() {
+                return false;
+            }
+        }
+        if let Some(min_e) = self.min_edge {
+            let e = row
+                .edge
+                .as_deref()
+                .and_then(|s| s.parse::<f64>().ok())
+                .unwrap_or(f64::NAN);
+            if !e.is_finite() || e < min_e {
+                return false;
+            }
+        }
+        if let Some(max_e) = self.max_edge {
+            let e = row
+                .edge
+                .as_deref()
+                .and_then(|s| s.parse::<f64>().ok())
+                .unwrap_or(f64::NAN);
+            if !e.is_finite() || e > max_e {
+                return false;
+            }
+        }
+        if let Some(min_r) = self.min_rsi {
+            let r = row.rsi.unwrap_or(f64::NAN);
+            if !r.is_finite() || r < min_r {
+                return false;
+            }
+        }
+        if let Some(max_r) = self.max_rsi {
+            let r = row.rsi.unwrap_or(f64::NAN);
+            if !r.is_finite() || r > max_r {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// True if any filter field is set (subset Monte Carlo / walk-forward).
+    pub fn is_active(&self) -> bool {
+        self.asset.is_some()
+            || self.direction.is_some()
+            || self.min_edge.is_some()
+            || self.max_edge.is_some()
+            || self.min_rsi.is_some()
+            || self.max_rsi.is_some()
+    }
+}
+
+/// Per-fold stats (chronological chunks of resolved-with-PnL rows).
+#[derive(Debug, Clone)]
+pub struct FoldDetail {
+    pub sum_pnl: f64,
+    /// Rows in fold with `outcome` set (for win rate).
+    pub n_with_outcome: usize,
+    pub wins: usize,
+    pub mean_edge: Option<f64>,
+}
+
+fn trade_row_won(row: &ResolvedTradeRow) -> Option<bool> {
+    let outcome = row.outcome?;
+    let dir = row.direction.as_deref()?;
+    Some(matches!((dir, outcome), ("YES", true) | ("NO", false)))
 }
 
 /// Summary stats for a set of PnL samples.
@@ -55,8 +157,14 @@ fn percentile_sorted(sorted: &[f64], q: f64) -> f64 {
     sorted[idx.min(sorted.len() - 1)]
 }
 
-/// Load resolved PnL values (USDC) from a JSONL file.
-pub fn load_resolved_pnls(path: &str) -> Result<Vec<f64>> {
+fn row_pnl_f64(row: &ResolvedTradeRow) -> Option<f64> {
+    let p = row.pnl.as_ref()?;
+    let d: Decimal = p.parse().ok()?;
+    Some(d.to_f64().unwrap_or(0.0))
+}
+
+/// Load rows that have a resolved `pnl` field (parseable USDC).
+pub fn load_resolved_trade_rows(path: &str) -> Result<Vec<ResolvedTradeRow>> {
     let f = File::open(path).with_context(|| format!("open trades file: {}", path))?;
     let reader = BufReader::new(f);
     let mut out = Vec::new();
@@ -66,14 +174,35 @@ pub fn load_resolved_pnls(path: &str) -> Result<Vec<f64>> {
         if line.is_empty() {
             continue;
         }
-        let row: ResolvedTradeRow = serde_json::from_str(line)
-            .with_context(|| format!("parse trade line: {}", line.chars().take(120).collect::<String>()))?;
-        if let Some(p) = row.pnl {
-            let d: Decimal = p.parse().context("parse pnl decimal")?;
-            out.push(d.to_f64().unwrap_or(0.0));
+        let row: ResolvedTradeRow = serde_json::from_str(line).with_context(|| {
+            format!(
+                "parse trade line: {}",
+                line.chars().take(120).collect::<String>()
+            )
+        })?;
+        if row.pnl.is_some() {
+            out.push(row);
         }
     }
     Ok(out)
+}
+
+/// Load resolved PnL values (USDC) from a JSONL file.
+pub fn load_resolved_pnls(path: &str) -> Result<Vec<f64>> {
+    Ok(load_resolved_trade_rows(path)?
+        .into_iter()
+        .filter_map(|r| row_pnl_f64(&r))
+        .collect())
+}
+
+/// Apply [`TradeFilter`] and return PnL samples for Monte Carlo.
+pub fn load_filtered_pnls(path: &str, filter: &TradeFilter) -> Result<Vec<f64>> {
+    let rows = load_resolved_trade_rows(path)?;
+    Ok(rows
+        .iter()
+        .filter(|r| filter.matches(r))
+        .filter_map(|r| row_pnl_f64(r))
+        .collect())
 }
 
 /// **Monte Carlo:** bootstrap resample trades with replacement `iterations` times; each iteration sums `n` trades.
@@ -121,6 +250,54 @@ pub fn walk_forward_fold_sums(trades: &[f64], folds: usize) -> Vec<f64> {
     sums
 }
 
+/// Walk-forward with win rate and mean edge per fold (uses full rows; PnL summed for all rows with `pnl` in chunk).
+pub fn walk_forward_fold_details(rows: &[ResolvedTradeRow], folds: usize) -> Vec<FoldDetail> {
+    if folds == 0 || rows.is_empty() {
+        return Vec::new();
+    }
+    let chunk = (rows.len() + folds - 1) / folds;
+    let mut out = Vec::with_capacity(folds);
+    for f in 0..folds {
+        let start = f * chunk;
+        if start >= rows.len() {
+            break;
+        }
+        let end = (start + chunk).min(rows.len());
+        let slice = &rows[start..end];
+        let mut sum_pnl = 0.0;
+        let mut n_outcome = 0usize;
+        let mut wins = 0usize;
+        let mut edge_sum = 0.0;
+        let mut edge_n = 0usize;
+        for r in slice {
+            if let Some(p) = row_pnl_f64(r) {
+                sum_pnl += p;
+            }
+            if r.outcome.is_some() {
+                n_outcome += 1;
+                if trade_row_won(r).unwrap_or(false) {
+                    wins += 1;
+                }
+            }
+            if let Some(e) = r.edge.as_ref().and_then(|s| s.parse::<f64>().ok()) {
+                edge_sum += e;
+                edge_n += 1;
+            }
+        }
+        out.push(FoldDetail {
+            sum_pnl,
+            n_with_outcome: n_outcome,
+            wins,
+            mean_edge: if edge_n > 0 {
+                Some(edge_sum / edge_n as f64)
+            } else {
+                None
+            },
+        });
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -138,5 +315,25 @@ mod tests {
         let s = walk_forward_fold_sums(&t, 3);
         assert_eq!(s.len(), 3);
         assert!((s.iter().sum::<f64>() - 55.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn trade_filter_asset() {
+        let mut f = TradeFilter::default();
+        f.asset = Some("btc".to_string());
+        let row = ResolvedTradeRow {
+            pnl: Some("1".to_string()),
+            outcome: Some(true),
+            direction: Some("YES".to_string()),
+            edge: Some("0.1".to_string()),
+            asset: Some("btc".to_string()),
+            rsi: Some(40.0),
+        };
+        assert!(f.matches(&row));
+        let row_eth = ResolvedTradeRow {
+            asset: Some("eth".to_string()),
+            ..row.clone()
+        };
+        assert!(!f.matches(&row_eth));
     }
 }

@@ -7,6 +7,28 @@ use polymarket_llm_bot::metrics::{read_trades_from_path, TradeRecord};
 use rust_decimal::Decimal;
 use std::collections::BTreeMap;
 
+#[derive(Default)]
+struct BucketAgg {
+    total: usize,
+    wins: usize,
+    pnl_sum: Decimal,
+    pnl_n: usize,
+}
+
+impl BucketAgg {
+    fn record_win(&mut self, won: bool) {
+        self.total += 1;
+        if won {
+            self.wins += 1;
+        }
+    }
+
+    fn record_pnl(&mut self, pnl: Decimal) {
+        self.pnl_sum += pnl;
+        self.pnl_n += 1;
+    }
+}
+
 fn main() -> Result<()> {
     let mut data_dir = std::env::var("DATA_DIR").unwrap_or_else(|_| "data".to_string());
     let mut recent_n = 20usize;
@@ -49,6 +71,7 @@ fn main() -> Result<()> {
     by_key(&trades, "direction", |t| t.direction.clone());
     edge_buckets(&trades);
     confidence_buckets(&trades);
+    telemetry_buckets(&trades);
     pnl_stats(&trades);
     println!("\n--- Last {} trades ---", recent_n);
     for t in trades.iter().rev().take(recent_n) {
@@ -123,19 +146,30 @@ fn edge_buckets(trades: &[TradeRecord]) {
     if resolved.is_empty() {
         return;
     }
-    let mut map: BTreeMap<&'static str, (usize, usize)> = BTreeMap::new();
+    let mut map: BTreeMap<&'static str, BucketAgg> = BTreeMap::new();
     for t in resolved {
-        let Some(e) = parse_dec(&t.edge) else { continue };
+        let Some(e) = parse_dec(&t.edge) else {
+            continue;
+        };
         let b = edge_bucket(e);
-        let entry = map.entry(b).or_insert((0, 0));
-        entry.0 += 1;
-        if trade_won(t).unwrap_or(false) {
-            entry.1 += 1;
+        let entry = map.entry(b).or_default();
+        entry.record_win(trade_won(t).unwrap_or(false));
+        if let Some(p) = t.pnl.as_ref().and_then(|s| parse_dec(s)) {
+            entry.record_pnl(p);
         }
     }
-    println!("\n--- Win rate by edge bucket ---");
-    for (k, (tot, w)) in map {
-        println!("  {}: {} / {} ({:.1}%)", k, w, tot, 100.0 * w as f64 / tot as f64);
+    println!("\n--- Win rate & mean PnL by edge bucket ---");
+    for (k, agg) in map {
+        let wr = 100.0 * agg.wins as f64 / agg.total as f64;
+        if agg.pnl_n > 0 {
+            let mean = agg.pnl_sum / Decimal::from(agg.pnl_n);
+            println!(
+                "  {}: {} / {} ({:.1}%)  mean_pnl={} (n={})",
+                k, agg.wins, agg.total, wr, mean, agg.pnl_n
+            );
+        } else {
+            println!("  {}: {} / {} ({:.1}%)  mean_pnl=n/a", k, agg.wins, agg.total, wr);
+        }
     }
 }
 
@@ -155,19 +189,195 @@ fn confidence_buckets(trades: &[TradeRecord]) {
     if resolved.is_empty() {
         return;
     }
-    let mut map: BTreeMap<&'static str, (usize, usize)> = BTreeMap::new();
+    let mut map: BTreeMap<&'static str, BucketAgg> = BTreeMap::new();
     for t in resolved {
-        let Some(c) = parse_dec(&t.confidence) else { continue };
+        let Some(c) = parse_dec(&t.confidence) else {
+            continue;
+        };
         let b = conf_bucket(c);
-        let entry = map.entry(b).or_insert((0, 0));
-        entry.0 += 1;
-        if trade_won(t).unwrap_or(false) {
-            entry.1 += 1;
+        let entry = map.entry(b).or_default();
+        entry.record_win(trade_won(t).unwrap_or(false));
+        if let Some(p) = t.pnl.as_ref().and_then(|s| parse_dec(s)) {
+            entry.record_pnl(p);
         }
     }
-    println!("\n--- Win rate by confidence bucket ---");
-    for (k, (tot, w)) in map {
-        println!("  {}: {} / {} ({:.1}%)", k, w, tot, 100.0 * w as f64 / tot as f64);
+    println!("\n--- Win rate & mean PnL by confidence bucket ---");
+    for (k, agg) in map {
+        let wr = 100.0 * agg.wins as f64 / agg.total as f64;
+        if agg.pnl_n > 0 {
+            let mean = agg.pnl_sum / Decimal::from(agg.pnl_n);
+            println!(
+                "  {}: {} / {} ({:.1}%)  mean_pnl={} (n={})",
+                k, agg.wins, agg.total, wr, mean, agg.pnl_n
+            );
+        } else {
+            println!("  {}: {} / {} ({:.1}%)  mean_pnl=n/a", k, agg.wins, agg.total, wr);
+        }
+    }
+}
+
+fn rsi_bucket(rsi: f64) -> &'static str {
+    if rsi < 30.0 {
+        "<30"
+    } else if rsi < 50.0 {
+        "30–50"
+    } else if rsi < 70.0 {
+        "50–70"
+    } else {
+        "70+"
+    }
+}
+
+fn volume_ratio_bucket(v: f64) -> &'static str {
+    if v < 1.0 {
+        "<1"
+    } else if v < 1.5 {
+        "1–1.5"
+    } else if v < 2.0 {
+        "1.5–2"
+    } else {
+        "2+"
+    }
+}
+
+fn vol_std_bucket(v: f64) -> &'static str {
+    if v < 0.12 {
+        "<0.12"
+    } else if v < 0.25 {
+        "0.12–0.25"
+    } else {
+        "0.25+"
+    }
+}
+
+fn secs_to_close_bucket(s: i64) -> &'static str {
+    if s < 120 {
+        "<120s"
+    } else if s < 600 {
+        "120s–10m"
+    } else {
+        "10m+"
+    }
+}
+
+/// RSI, volume_ratio, volatility_std_pct, secs_to_close (when present on rows).
+fn telemetry_buckets(trades: &[TradeRecord]) {
+    let resolved: Vec<&TradeRecord> = trades.iter().filter(|t| t.outcome.is_some()).collect();
+    if resolved.is_empty() {
+        return;
+    }
+
+    let mut has_any = false;
+
+    let mut rsi_m: BTreeMap<&'static str, BucketAgg> = BTreeMap::new();
+    for t in &resolved {
+        let Some(r) = t.rsi else { continue };
+        has_any = true;
+        let b = rsi_bucket(r);
+        let e = rsi_m.entry(b).or_default();
+        e.record_win(trade_won(t).unwrap_or(false));
+        if let Some(p) = t.pnl.as_ref().and_then(|s| parse_dec(s)) {
+            e.record_pnl(p);
+        }
+    }
+    if has_any {
+        println!("\n--- Win rate & mean PnL by RSI bucket ---");
+        for (k, agg) in &rsi_m {
+            let wr = 100.0 * agg.wins as f64 / agg.total as f64;
+            if agg.pnl_n > 0 {
+                let mean = agg.pnl_sum / Decimal::from(agg.pnl_n);
+                println!(
+                    "  {}: {} / {} ({:.1}%)  mean_pnl={} (n={})",
+                    k, agg.wins, agg.total, wr, mean, agg.pnl_n
+                );
+            } else {
+                println!("  {}: {} / {} ({:.1}%)  mean_pnl=n/a", k, agg.wins, agg.total, wr);
+            }
+        }
+    }
+
+    has_any = false;
+    let mut vr_m: BTreeMap<&'static str, BucketAgg> = BTreeMap::new();
+    for t in &resolved {
+        let Some(v) = t.volume_ratio else { continue };
+        has_any = true;
+        let b = volume_ratio_bucket(v);
+        let e = vr_m.entry(b).or_default();
+        e.record_win(trade_won(t).unwrap_or(false));
+        if let Some(p) = t.pnl.as_ref().and_then(|s| parse_dec(s)) {
+            e.record_pnl(p);
+        }
+    }
+    if has_any {
+        println!("\n--- Win rate & mean PnL by volume_ratio bucket ---");
+        for (k, agg) in &vr_m {
+            let wr = 100.0 * agg.wins as f64 / agg.total as f64;
+            if agg.pnl_n > 0 {
+                let mean = agg.pnl_sum / Decimal::from(agg.pnl_n);
+                println!(
+                    "  {}: {} / {} ({:.1}%)  mean_pnl={} (n={})",
+                    k, agg.wins, agg.total, wr, mean, agg.pnl_n
+                );
+            } else {
+                println!("  {}: {} / {} ({:.1}%)  mean_pnl=n/a", k, agg.wins, agg.total, wr);
+            }
+        }
+    }
+
+    has_any = false;
+    let mut vs_m: BTreeMap<&'static str, BucketAgg> = BTreeMap::new();
+    for t in &resolved {
+        let Some(v) = t.volatility_std_pct else { continue };
+        has_any = true;
+        let b = vol_std_bucket(v);
+        let e = vs_m.entry(b).or_default();
+        e.record_win(trade_won(t).unwrap_or(false));
+        if let Some(p) = t.pnl.as_ref().and_then(|s| parse_dec(s)) {
+            e.record_pnl(p);
+        }
+    }
+    if has_any {
+        println!("\n--- Win rate & mean PnL by volatility_std_pct bucket ---");
+        for (k, agg) in &vs_m {
+            let wr = 100.0 * agg.wins as f64 / agg.total as f64;
+            if agg.pnl_n > 0 {
+                let mean = agg.pnl_sum / Decimal::from(agg.pnl_n);
+                println!(
+                    "  {}: {} / {} ({:.1}%)  mean_pnl={} (n={})",
+                    k, agg.wins, agg.total, wr, mean, agg.pnl_n
+                );
+            } else {
+                println!("  {}: {} / {} ({:.1}%)  mean_pnl=n/a", k, agg.wins, agg.total, wr);
+            }
+        }
+    }
+
+    has_any = false;
+    let mut sc_m: BTreeMap<&'static str, BucketAgg> = BTreeMap::new();
+    for t in &resolved {
+        let Some(s) = t.secs_to_close else { continue };
+        has_any = true;
+        let b = secs_to_close_bucket(s);
+        let e = sc_m.entry(b).or_default();
+        e.record_win(trade_won(t).unwrap_or(false));
+        if let Some(p) = t.pnl.as_ref().and_then(|s| parse_dec(s)) {
+            e.record_pnl(p);
+        }
+    }
+    if has_any {
+        println!("\n--- Win rate & mean PnL by secs_to_close bucket ---");
+        for (k, agg) in &sc_m {
+            let wr = 100.0 * agg.wins as f64 / agg.total as f64;
+            if agg.pnl_n > 0 {
+                let mean = agg.pnl_sum / Decimal::from(agg.pnl_n);
+                println!(
+                    "  {}: {} / {} ({:.1}%)  mean_pnl={} (n={})",
+                    k, agg.wins, agg.total, wr, mean, agg.pnl_n
+                );
+            } else {
+                println!("  {}: {} / {} ({:.1}%)  mean_pnl=n/a", k, agg.wins, agg.total, wr);
+            }
+        }
     }
 }
 

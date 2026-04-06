@@ -37,6 +37,14 @@ pub struct TechnicalSignal {
     pub probability: Decimal,
     pub confidence: Decimal,      // 0.5-1.0
     pub reasoning: String,
+    /// Wilder RSI (0–100) at signal time.
+    pub rsi: f64,
+    /// MACD histogram (MACD line − signal line) at signal time.
+    pub macd_histogram: f64,
+    /// Last-bar volume / rolling average (see `compute_volume_ratio`).
+    pub volume_ratio: f64,
+    /// RSI+momentum cluster vote: `UP`, `DOWN`, or `TIE` when votes tie / no majority.
+    pub cluster_direction: String,
 }
 
 /// Signal direction from technical analysis
@@ -374,11 +382,21 @@ pub fn generate_signal(candles: &[Candle], config: &SignalConfig) -> SignalResul
         taker_note
     );
 
+    let cluster_direction = match cluster_dir {
+        Some(SignalDirection::Up) => "UP".to_string(),
+        Some(SignalDirection::Down) => "DOWN".to_string(),
+        None => "TIE".to_string(),
+    };
+
     Ok(TechnicalSignal {
         direction,
         probability: probability_dec,
         confidence: confidence_dec,
         reasoning,
+        rsi,
+        macd_histogram: histogram,
+        volume_ratio,
+        cluster_direction,
     })
 }
 

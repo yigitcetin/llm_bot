@@ -34,6 +34,38 @@ pub struct TradeRecord {
     pub outcome: Option<bool>, // true = YES won, false = NO won
     pub pnl: Option<String>,
     pub resolved_at: Option<DateTime<Utc>>,
+    // --- Telemetry (optional for backward-compatible JSONL) ---
+    #[serde(default)]
+    pub rsi: Option<f64>,
+    #[serde(default)]
+    pub macd_histogram: Option<f64>,
+    #[serde(default)]
+    pub volume_ratio: Option<f64>,
+    #[serde(default)]
+    pub cluster_direction: Option<String>,
+    #[serde(default)]
+    pub market_yes_price: Option<String>,
+    #[serde(default)]
+    pub liquidity: Option<String>,
+    #[serde(default)]
+    pub secs_to_close: Option<i64>,
+    #[serde(default)]
+    pub volatility_std_pct: Option<f64>,
+    #[serde(default)]
+    pub kelly_fraction: Option<String>,
+    #[serde(default)]
+    pub balance_at_trade: Option<String>,
+    #[serde(default)]
+    pub daily_loss_at_trade: Option<String>,
+    /// `Some(true)` when HTF filter ran and passed; `None` when HTF off or not applied.
+    #[serde(default)]
+    pub htf_aligned: Option<bool>,
+    #[serde(default)]
+    pub adaptive_min_edge: Option<String>,
+    #[serde(default)]
+    pub adaptive_min_confidence: Option<String>,
+    #[serde(default)]
+    pub sizing_cap_hit: Option<String>,
 }
 
 impl TradeRecord {
@@ -71,6 +103,21 @@ impl TradeRecord {
             outcome: None,
             pnl: None,
             resolved_at: None,
+            rsi: None,
+            macd_histogram: None,
+            volume_ratio: None,
+            cluster_direction: None,
+            market_yes_price: None,
+            liquidity: None,
+            secs_to_close: None,
+            volatility_std_pct: None,
+            kelly_fraction: None,
+            balance_at_trade: None,
+            daily_loss_at_trade: None,
+            htf_aligned: None,
+            adaptive_min_edge: None,
+            adaptive_min_confidence: None,
+            sizing_cap_hit: None,
         }
     }
 }

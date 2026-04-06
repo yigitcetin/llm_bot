@@ -2,6 +2,7 @@
 
 use anyhow::Result;
 use rust_decimal::Decimal;
+use rust_decimal::prelude::ToPrimitive;
 use tracing::info;
 
 use crate::adaptive;
@@ -54,6 +55,7 @@ pub async fn run_cycle(
     info!(count = markets.len(), "markets fetched");
 
     for market in markets {
+        let mut htf_aligned: Option<bool> = None;
         let st = cfg.asset_strategy(&market.asset);
         let signal_config = st.signal_config();
 
@@ -254,6 +256,9 @@ pub async fn run_cycle(
             continue;
         }
 
+        let volatility_std_pct =
+            compute_return_std_pct(&candles, st.volatility_filter.sample_bars);
+
         if st.htf_enabled {
             match spot
                 .fetch_candles_at_exchange(
@@ -282,6 +287,7 @@ pub async fn run_cycle(
                         );
                         continue;
                     }
+                    htf_aligned = Some(true);
                 }
                 Err(e) => {
                     tracing::warn!(
@@ -376,7 +382,7 @@ pub async fn run_cycle(
         trade.direction = direction;
 
         let balance = risk.available_balance();
-        let size_usdc = edge::kelly_size_with_caps(
+        let sizing = edge::kelly_size_with_caps_detail(
             trade.edge,
             signal.confidence,
             balance,
@@ -387,6 +393,7 @@ pub async fn run_cycle(
             st.cheap_token_max_usdc,
             st.large_order_usdc_hard_cap,
         );
+        let size_usdc = sizing.size_usdc;
 
         if size_usdc < st.min_order_usdc {
             log_skip_decision(
@@ -450,7 +457,7 @@ pub async fn run_cycle(
                     Decimal::ZERO
                 };
 
-                let record = TradeRecord::new(
+                let mut record = TradeRecord::new(
                     market.condition_id.clone(),
                     market.asset.clone(),
                     market.duration.clone(),
@@ -464,6 +471,25 @@ pub async fn run_cycle(
                     signal.reasoning.clone(),
                     order_id.clone(),
                 );
+                record.rsi = Some(signal.rsi);
+                record.macd_histogram = Some(signal.macd_histogram);
+                record.volume_ratio = Some(signal.volume_ratio);
+                record.cluster_direction = Some(signal.cluster_direction.clone());
+                record.market_yes_price = Some(market.yes_price.to_string());
+                record.liquidity = Some(market.liquidity.to_string());
+                record.secs_to_close = Some(market.secs_to_close());
+                record.volatility_std_pct = volatility_std_pct.and_then(|d| d.to_f64());
+                record.kelly_fraction = Some(sizing.kelly_fraction.to_string());
+                record.balance_at_trade = Some(balance.to_string());
+                record.daily_loss_at_trade = Some(risk.daily_loss().to_string());
+                record.htf_aligned = htf_aligned;
+                record.adaptive_min_edge = st
+                    .adaptive_thresholds
+                    .then(|| eff_min_edge.to_string());
+                record.adaptive_min_confidence = st
+                    .adaptive_thresholds
+                    .then(|| eff_min_confidence.to_string());
+                record.sizing_cap_hit = Some(sizing.cap_hit.to_string());
                 let _ = logger.log_trade(&record);
 
                 info!(
