@@ -3,8 +3,8 @@
 //! **P7 (plan):** Use historical `trades.jsonl` (resolved rows) to stress-test PnL stability.
 
 use anyhow::{Context, Result};
-use rust_decimal::Decimal;
 use rust_decimal::prelude::ToPrimitive;
+use rust_decimal::Decimal;
 use serde::Deserialize;
 use std::fs::File;
 use std::io::{BufRead, BufReader};

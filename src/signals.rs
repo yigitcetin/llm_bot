@@ -1,11 +1,11 @@
 use anyhow::Result;
-use rust_decimal::Decimal;
 use rust_decimal::prelude::ToPrimitive;
+use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use tracing::debug;
 
-use crate::spot_price::Candle;
 use crate::constants::MIN_CANDLES_FOR_SIGNAL;
+use crate::spot_price::Candle;
 
 /// Teknik sinyal üretilemediğinde (düşük hacim, berabere oy vb.).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,7 +35,7 @@ pub struct TechnicalSignal {
     pub direction: SignalDirection,
     /// Implied probability that **YES** wins (direction-aware vs momentum; typically ~0.15–0.85).
     pub probability: Decimal,
-    pub confidence: Decimal,      // 0.5-1.0
+    pub confidence: Decimal, // 0.5-1.0
     pub reasoning: String,
     /// Wilder RSI (0–100) at signal time.
     pub rsi: f64,
@@ -50,8 +50,8 @@ pub struct TechnicalSignal {
 /// Signal direction from technical analysis
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SignalDirection {
-    Up,    // Spot price expected to go UP
-    Down,  // Spot price expected to go DOWN
+    Up,   // Spot price expected to go UP
+    Down, // Spot price expected to go DOWN
 }
 
 /// Son mumun hacmi / son `period` mumun ortalama hacmi (spot kalite ölçümü).
@@ -188,7 +188,10 @@ fn calculate_momentum(candles: &[Candle], lookback: usize) -> Result<f64> {
     }
 
     let current = candles.last().unwrap().close.to_f64().unwrap_or(0.0);
-    let past = candles[candles.len() - lookback - 1].close.to_f64().unwrap_or(0.0);
+    let past = candles[candles.len() - lookback - 1]
+        .close
+        .to_f64()
+        .unwrap_or(0.0);
 
     if past == 0.0 {
         return Ok(0.0);
@@ -203,7 +206,8 @@ fn calculate_avg_volume(candles: &[Candle], period: usize) -> f64 {
         return 0.0;
     }
 
-    let sum: f64 = candles.iter()
+    let sum: f64 = candles
+        .iter()
         .rev()
         .take(period)
         .map(|c| c.volume.to_f64().unwrap_or(0.0))
@@ -263,7 +267,8 @@ pub fn generate_signal(candles: &[Candle], config: &SignalConfig) -> SignalResul
 
     let avg_bars = config.volume_avg_bars.max(5);
     // P3: optional use of **closed** candles only for volume ratio (excludes the open bar).
-    let candles_for_volume: &[Candle] = if config.volume_use_closed_candle_only && candles.len() > 1 {
+    let candles_for_volume: &[Candle] = if config.volume_use_closed_candle_only && candles.len() > 1
+    {
         &candles[..candles.len() - 1]
     } else {
         candles

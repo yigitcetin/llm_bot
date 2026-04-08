@@ -1,8 +1,8 @@
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 
-use crate::types::{Direction, TradeSignal};
 use crate::constants::SLIPPAGE_BPS;
+use crate::types::{Direction, TradeSignal};
 
 /// Calculate edge and direction with slippage protection.
 /// Returns `None` if edge is below `min_edge`.
@@ -37,7 +37,7 @@ pub fn calculate(
     Some(TradeSignal {
         direction,
         edge: abs_edge,
-        token_price
+        token_price,
     })
 }
 
@@ -98,7 +98,11 @@ pub struct KellySizingResult {
 }
 
 /// Half-Kelly fraction (before balance multiply), capped by `max_position_pct`.
-pub fn half_kelly_fraction(edge: Decimal, confidence: Decimal, max_position_pct: Decimal) -> Decimal {
+pub fn half_kelly_fraction(
+    edge: Decimal,
+    confidence: Decimal,
+    max_position_pct: Decimal,
+) -> Decimal {
     let kelly = edge * dec!(0.5) * confidence;
     kelly.min(max_position_pct)
 }
@@ -157,11 +161,7 @@ pub fn kelly_size_with_caps_detail(
     }
 
     let mut size = raw;
-    let mut cap_hit: &'static str = if max_pct_hit {
-        "max_position"
-    } else {
-        "none"
-    };
+    let mut cap_hit: &'static str = if max_pct_hit { "max_position" } else { "none" };
 
     if token_price > Decimal::ZERO && token_price < cheap_threshold {
         let capped = size.min(cheap_max_usdc);
@@ -251,7 +251,7 @@ mod tests {
     #[test]
     fn kelly_size_scales_with_confidence() {
         let high = kelly_size(dec!(0.10), dec!(1.0), dec!(1000), dec!(0.10), dec!(5));
-        let low  = kelly_size(dec!(0.10), dec!(0.5), dec!(1000), dec!(0.10), dec!(5));
+        let low = kelly_size(dec!(0.10), dec!(0.5), dec!(1000), dec!(0.10), dec!(5));
         assert!(high > low, "higher confidence should produce larger size");
     }
 
@@ -288,7 +288,10 @@ mod tests {
         let result = calculate(dec!(0.99), dec!(0.98), dec!(0.01)).unwrap();
         // Price with slippage: 0.98 * 1.002 = 0.98196, which is < 0.99
         assert!(result.token_price <= dec!(0.99), "Should cap at 0.99");
-        assert!(result.token_price > dec!(0.98), "Should have slippage applied");
+        assert!(
+            result.token_price > dec!(0.98),
+            "Should have slippage applied"
+        );
     }
 
     #[test]

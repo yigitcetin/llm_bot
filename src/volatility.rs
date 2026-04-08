@@ -7,8 +7,8 @@
 //! civarıdır (veriye göre `analyze` ile kesinti oranına bakın).
 
 use anyhow::Result;
-use rust_decimal::Decimal;
 use rust_decimal::prelude::ToPrimitive;
+use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 
 use crate::spot_price::Candle;
@@ -48,7 +48,10 @@ impl VolatilityFilterConfig {
                 );
             }
         }
-        for (label, v) in [("VOL_MIN_STD_PCT", self.min_std_pct), ("VOL_MAX_STD_PCT", self.max_std_pct)] {
+        for (label, v) in [
+            ("VOL_MIN_STD_PCT", self.min_std_pct),
+            ("VOL_MAX_STD_PCT", self.max_std_pct),
+        ] {
             if let Some(m) = v {
                 if m < Decimal::ZERO || m > dec!(100) {
                     anyhow::bail!("{} must be between 0 and 100, got {}", label, m);

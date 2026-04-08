@@ -3,8 +3,8 @@
 //! - Optional **minimum seconds to close** (skip illiquid end-game).
 //! - Optional **probability dampening** in the last N seconds of the window (reduce conviction near expiry).
 
-use rust_decimal::Decimal;
 use rust_decimal::prelude::ToPrimitive;
+use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use tracing::debug;
 
@@ -79,12 +79,8 @@ pub fn apply_market_timing_to_signal(
         return signal;
     };
     let secs = market.secs_to_close();
-    signal.probability = apply_expiry_probability_dampening(
-        signal.probability,
-        secs,
-        window_secs,
-        dampen,
-    );
+    signal.probability =
+        apply_expiry_probability_dampening(signal.probability, secs, window_secs, dampen);
     signal.probability = signal.probability.max(dec!(0.15)).min(dec!(0.85));
     debug!(
         asset = %market.asset,

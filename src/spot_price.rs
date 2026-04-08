@@ -1,9 +1,9 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use rust_decimal::Decimal;
 use rust_decimal::prelude::ToPrimitive;
-use serde::Deserialize;
+use rust_decimal::Decimal;
 use serde::de::IgnoredAny;
+use serde::Deserialize;
 use tracing::{debug, warn};
 
 use crate::constants::{
@@ -32,16 +32,16 @@ pub struct SpotPriceClient {
 // Binance API kline: https://binance-docs.github.io/apidocs/spot/en/#kline-candlestick-data
 #[derive(Deserialize)]
 struct BinanceKline(
-    i64,    // 0 Open time
-    String, // 1 Open
-    String, // 2 High
-    String, // 3 Low
-    String, // 4 Close
-    String, // 5 Volume
+    i64,        // 0 Open time
+    String,     // 1 Open
+    String,     // 2 High
+    String,     // 3 Low
+    String,     // 4 Close
+    String,     // 5 Volume
     IgnoredAny, // 6 Close time
     IgnoredAny, // 7 Quote asset volume
     IgnoredAny, // 8 Number of trades
-    String, // 9 Taker buy base asset volume
+    String,     // 9 Taker buy base asset volume
     IgnoredAny, // 10 Taker buy quote asset volume
     IgnoredAny, // 11 Ignore
 );
@@ -99,7 +99,8 @@ impl SpotPriceClient {
             return self.fetch_binance_klines_with_retries(&url, &symbol).await;
         }
 
-        self.fetch_binance_candles_paged(asset, interval, limit).await
+        self.fetch_binance_candles_paged(asset, interval, limit)
+            .await
     }
 
     /// Pages backward using `endTime` until `target` candles are collected (oldest → newest).
@@ -132,7 +133,9 @@ impl SpotPriceClient {
                 "fetching Binance candles (paged)"
             );
 
-            let batch = self.fetch_binance_klines_with_retries(&url, &symbol).await?;
+            let batch = self
+                .fetch_binance_klines_with_retries(&url, &symbol)
+                .await?;
             if batch.is_empty() {
                 break;
             }
@@ -167,7 +170,11 @@ impl SpotPriceClient {
         Ok(out)
     }
 
-    async fn fetch_binance_klines_with_retries(&self, url: &str, symbol: &str) -> Result<Vec<Candle>> {
+    async fn fetch_binance_klines_with_retries(
+        &self,
+        url: &str,
+        symbol: &str,
+    ) -> Result<Vec<Candle>> {
         for attempt in 0..DEFAULT_MAX_RETRIES {
             if attempt > 0 {
                 let backoff_ms = RETRY_BACKOFF_BASE_MS * 2_u64.pow(attempt);
@@ -212,7 +219,10 @@ impl SpotPriceClient {
 
         let status = response.status();
         if !status.is_success() {
-            let body = response.text().await.unwrap_or_else(|_| "<no body>".to_string());
+            let body = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "<no body>".to_string());
             anyhow::bail!("Binance API error {}: {}", status, body);
         }
 
@@ -264,7 +274,6 @@ impl SpotPriceClient {
             || error_str.contains("timeout")
             || error_str.contains("connection")
     }
-
 }
 
 #[cfg(test)]
@@ -274,10 +283,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "network: live Binance API"]
     async fn test_fetch_binance_candles() {
-        let client = SpotPriceClient::new(
-            reqwest::Client::new(),
-            "binance".to_string()
-        );
+        let client = SpotPriceClient::new(reqwest::Client::new(), "binance".to_string());
 
         let candles = client.fetch_candles("BTC", "1m", 10).await;
         assert!(candles.is_ok());
@@ -286,5 +292,4 @@ mod tests {
         assert_eq!(candles.len(), 10);
         assert!(candles[0].close > Decimal::ZERO);
     }
-
 }

@@ -45,10 +45,7 @@ impl IndicatorCache {
         config: &SignalConfig,
     ) -> Result<Arc<TechnicalSignal>> {
         // Create cache key from last candle timestamp
-        let last_timestamp = candles
-            .last()
-            .map(|c| c.timestamp.timestamp())
-            .unwrap_or(0);
+        let last_timestamp = candles.last().map(|c| c.timestamp.timestamp()).unwrap_or(0);
 
         let key = CacheKey {
             asset: asset.to_string(),
@@ -77,9 +74,7 @@ impl IndicatorCache {
             "cache MISS for indicators - computing"
         );
 
-        let signal = Arc::new(
-            generate_signal(candles, config).map_err(|e| anyhow::anyhow!(e))?,
-        );
+        let signal = Arc::new(generate_signal(candles, config).map_err(|e| anyhow::anyhow!(e))?);
 
         self.cache.insert(
             key,
@@ -145,10 +140,14 @@ mod tests {
         let config = SignalConfig::default();
 
         // First call - cache miss
-        let signal1 = cache.get_or_compute("btc", "1m", &candles, &config).unwrap();
+        let signal1 = cache
+            .get_or_compute("btc", "1m", &candles, &config)
+            .unwrap();
 
         // Second call - cache hit
-        let signal2 = cache.get_or_compute("btc", "1m", &candles, &config).unwrap();
+        let signal2 = cache
+            .get_or_compute("btc", "1m", &candles, &config)
+            .unwrap();
 
         assert_eq!(signal1.probability, signal2.probability);
         assert_eq!(signal1.confidence, signal2.confidence);
@@ -164,8 +163,12 @@ mod tests {
         let candles = mock_candles(100);
         let config = SignalConfig::default();
 
-        let _btc = cache.get_or_compute("btc", "1m", &candles, &config).unwrap();
-        let _eth = cache.get_or_compute("eth", "1m", &candles, &config).unwrap();
+        let _btc = cache
+            .get_or_compute("btc", "1m", &candles, &config)
+            .unwrap();
+        let _eth = cache
+            .get_or_compute("eth", "1m", &candles, &config)
+            .unwrap();
 
         // Different assets should be cached separately
         assert_eq!(cache.stats().size, 2);
@@ -177,7 +180,9 @@ mod tests {
         let candles = mock_candles(100);
         let config = SignalConfig::default();
 
-        cache.get_or_compute("btc", "1m", &candles, &config).unwrap();
+        cache
+            .get_or_compute("btc", "1m", &candles, &config)
+            .unwrap();
         assert_eq!(cache.stats().size, 1);
 
         // Wait and cleanup

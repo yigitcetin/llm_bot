@@ -1,7 +1,7 @@
 use rust_decimal::Decimal;
-use tracing::warn;
 use std::collections::HashMap;
 use std::fmt;
+use tracing::warn;
 
 use crate::config::AppConfig;
 use crate::types::OpenPosition;
@@ -108,7 +108,8 @@ impl RiskManager {
     /// Call when an order is placed.
     pub fn record_trade(&mut self, size_usdc: Decimal, position: OpenPosition) {
         self.balance -= size_usdc;
-        self.open_positions.insert(position.condition_id.clone(), position);
+        self.open_positions
+            .insert(position.condition_id.clone(), position);
     }
 
     /// Call when a position resolves.

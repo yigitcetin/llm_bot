@@ -129,10 +129,7 @@ impl ResolutionChecker {
         if let Some(tokens) = &market.tokens {
             for token in tokens {
                 if token.winner == Some(true) {
-                    let yes_won = matches!(
-                        token.outcome.to_uppercase().as_str(),
-                        "YES" | "UP"
-                    );
+                    let yes_won = matches!(token.outcome.to_uppercase().as_str(), "YES" | "UP");
                     return Ok(Some(yes_won));
                 }
             }

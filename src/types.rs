@@ -6,8 +6,8 @@ use rust_decimal_macros::dec;
 pub struct Market {
     pub condition_id: String,
     pub question: String,
-    pub asset: String,       // "btc" | "eth"
-    pub duration: String,    // "5m" | "15m"
+    pub asset: String,    // "btc" | "eth"
+    pub duration: String, // "5m" | "15m"
     pub yes_price: Decimal,
     pub no_price: Decimal,
     pub end_date_ms: i64,

@@ -20,11 +20,8 @@ static TRADES_TOTAL: Lazy<IntCounter> = Lazy::new(|| {
 });
 
 static ORDERS_FAILED_TOTAL: Lazy<IntCounter> = Lazy::new(|| {
-    register_int_counter!(
-        "orders_failed_total",
-        "Failed order placement attempts"
-    )
-    .expect("register orders_failed_total")
+    register_int_counter!("orders_failed_total", "Failed order placement attempts")
+        .expect("register orders_failed_total")
 });
 
 static CYCLE_DURATION_SECONDS: Lazy<Histogram> = Lazy::new(|| {

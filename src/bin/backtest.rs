@@ -4,11 +4,11 @@
 //!   cargo run --bin backtest -- [PATH] [ITERATIONS] [--asset btc] [--direction YES] [--min-edge F] [--max-edge F] [--min-rsi F] [--max-rsi F]
 
 use anyhow::{Context, Result};
-use rust_decimal::prelude::ToPrimitive;
 use polymarket_llm_bot::backtest::{
-    load_resolved_trade_rows, monte_carlo_total_pnl, walk_forward_fold_details, walk_forward_fold_sums,
-    PnlSummary, TradeFilter,
+    load_resolved_trade_rows, monte_carlo_total_pnl, walk_forward_fold_details,
+    walk_forward_fold_sums, PnlSummary, TradeFilter,
 };
+use rust_decimal::prelude::ToPrimitive;
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
@@ -44,35 +44,19 @@ fn main() -> Result<()> {
                 i += 2;
             }
             "--min-edge" => {
-                filter.min_edge = Some(
-                    args[i + 1]
-                        .parse()
-                        .context("--min-edge must be a number")?,
-                );
+                filter.min_edge = Some(args[i + 1].parse().context("--min-edge must be a number")?);
                 i += 2;
             }
             "--max-edge" => {
-                filter.max_edge = Some(
-                    args[i + 1]
-                        .parse()
-                        .context("--max-edge must be a number")?,
-                );
+                filter.max_edge = Some(args[i + 1].parse().context("--max-edge must be a number")?);
                 i += 2;
             }
             "--min-rsi" => {
-                filter.min_rsi = Some(
-                    args[i + 1]
-                        .parse()
-                        .context("--min-rsi must be a number")?,
-                );
+                filter.min_rsi = Some(args[i + 1].parse().context("--min-rsi must be a number")?);
                 i += 2;
             }
             "--max-rsi" => {
-                filter.max_rsi = Some(
-                    args[i + 1]
-                        .parse()
-                        .context("--max-rsi must be a number")?,
-                );
+                filter.max_rsi = Some(args[i + 1].parse().context("--max-rsi must be a number")?);
                 i += 2;
             }
             "--help" | "-h" => {

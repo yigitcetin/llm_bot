@@ -10,13 +10,13 @@ use polymarket_llm_bot::constants;
 use polymarket_llm_bot::execution;
 use polymarket_llm_bot::gamma;
 use polymarket_llm_bot::indicator_cache;
+use polymarket_llm_bot::metrics;
 use polymarket_llm_bot::prometheus_export;
+use polymarket_llm_bot::resolution_checker;
 use polymarket_llm_bot::risk;
 use polymarket_llm_bot::spot_price;
 use polymarket_llm_bot::telemetry;
 use polymarket_llm_bot::trading_loop::run_cycle;
-use polymarket_llm_bot::metrics;
-use polymarket_llm_bot::resolution_checker;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -29,7 +29,7 @@ async fn main() -> Result<()> {
         prometheus_export::spawn_metrics_server()?;
     }
 
-    let cfg = AppConfig::from_env()?;
+    let cfg = AppConfig::load()?;
 
     info!(
         dry_run = cfg.dry_run,
@@ -92,7 +92,9 @@ async fn main() -> Result<()> {
         tokio::time::sleep(std::time::Duration::from_secs(cfg.cycle_secs)).await;
 
         let open = risk.open_positions_detail();
-        resolver.check_and_resolve(&open, &mut risk, &logger).await?;
+        resolver
+            .check_and_resolve(&open, &mut risk, &logger)
+            .await?;
     }
 }
 

@@ -49,7 +49,9 @@ pub fn effective_thresholds(
     }
 
     let eff_edge = (base_min_edge + edge_adj).max(dec!(0.03)).min(dec!(0.25));
-    let eff_conf = (base_min_confidence + conf_adj).max(dec!(0.5)).min(dec!(0.99));
+    let eff_conf = (base_min_confidence + conf_adj)
+        .max(dec!(0.5))
+        .min(dec!(0.99));
     (eff_edge, eff_conf)
 }
 
@@ -127,14 +129,8 @@ mod tests {
             .map(|_| sample_row("btc", Direction::Yes, true))
             .collect();
         write_jsonl(&p, &rows);
-        let (e, c) = effective_thresholds(
-            p.to_str().unwrap(),
-            "btc",
-            dec!(0.06),
-            dec!(0.70),
-            4,
-            true,
-        );
+        let (e, c) =
+            effective_thresholds(p.to_str().unwrap(), "btc", dec!(0.06), dec!(0.70), 4, true);
         assert_eq!(e, dec!(0.06));
         assert_eq!(c, dec!(0.70));
     }
@@ -162,14 +158,8 @@ mod tests {
             .map(|_| sample_row("btc", Direction::Yes, true))
             .collect();
         write_jsonl(&p, &rows);
-        let (e, c) = effective_thresholds(
-            p.to_str().unwrap(),
-            "btc",
-            dec!(0.06),
-            dec!(0.70),
-            50,
-            true,
-        );
+        let (e, c) =
+            effective_thresholds(p.to_str().unwrap(), "btc", dec!(0.06), dec!(0.70), 50, true);
         assert_eq!(e, dec!(0.055));
         assert_eq!(c, dec!(0.68));
     }
@@ -183,14 +173,8 @@ mod tests {
             .map(|_| sample_row("btc", Direction::Yes, false))
             .collect();
         write_jsonl(&p, &rows);
-        let (e, c) = effective_thresholds(
-            p.to_str().unwrap(),
-            "btc",
-            dec!(0.06),
-            dec!(0.70),
-            50,
-            true,
-        );
+        let (e, c) =
+            effective_thresholds(p.to_str().unwrap(), "btc", dec!(0.06), dec!(0.70), 50, true);
         assert_eq!(e, dec!(0.07));
         assert_eq!(c, dec!(0.72));
     }
@@ -205,14 +189,8 @@ mod tests {
             .collect();
         rows.extend((0..5).map(|_| sample_row("btc", Direction::Yes, false)));
         write_jsonl(&p, &rows);
-        let (e, c) = effective_thresholds(
-            p.to_str().unwrap(),
-            "btc",
-            dec!(0.06),
-            dec!(0.70),
-            50,
-            true,
-        );
+        let (e, c) =
+            effective_thresholds(p.to_str().unwrap(), "btc", dec!(0.06), dec!(0.70), 50, true);
         assert_eq!(e, dec!(0.07));
         assert_eq!(c, dec!(0.72));
     }

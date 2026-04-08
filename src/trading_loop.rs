@@ -1,8 +1,8 @@
 //! One full scan–analyze–execute cycle (live trading loop). Used by the binary `main`.
 
 use anyhow::Result;
-use rust_decimal::Decimal;
 use rust_decimal::prelude::ToPrimitive;
+use rust_decimal::Decimal;
 use tracing::info;
 
 use crate::adaptive;
@@ -60,12 +60,7 @@ pub async fn run_cycle(
         let signal_config = st.signal_config();
 
         if risk.has_position(&market.condition_id) {
-            log_skip_decision(
-                logger,
-                &market,
-                "already_have_open_position",
-                None,
-            );
+            log_skip_decision(logger, &market, "already_have_open_position", None);
             info!(
                 condition_id = %market.condition_id,
                 question = %market.question,
@@ -79,7 +74,10 @@ pub async fn run_cycle(
                 logger,
                 &market,
                 "liquidity_too_low",
-                Some(format!("liquidity={}, min={}", market.liquidity, MIN_LIQUIDITY_USDC)),
+                Some(format!(
+                    "liquidity={}, min={}",
+                    market.liquidity, MIN_LIQUIDITY_USDC
+                )),
             );
             info!(
                 condition_id = %market.condition_id,
@@ -192,12 +190,7 @@ pub async fn run_cycle(
                         .volume_min_ratio
                         .map(|v| format!("volume_ratio={:.4}, min_ratio={:.4}", vr, v))
                         .unwrap_or_else(|| format!("volume_ratio={:.4}", vr));
-                    log_skip_decision(
-                        logger,
-                        &market,
-                        "spot_volume_below_threshold",
-                        Some(detail),
-                    );
+                    log_skip_decision(logger, &market, "spot_volume_below_threshold", Some(detail));
                     info!(
                         condition_id = %market.condition_id,
                         question = %market.question,
@@ -223,12 +216,8 @@ pub async fn run_cycle(
 
         let window_secs = parse_duration_to_secs(&market.duration);
         let mut signal = (*signal_arc).clone();
-        signal = apply_market_timing_to_signal(
-            signal,
-            &market,
-            window_secs,
-            st.expiry_dampen_last_secs,
-        );
+        signal =
+            apply_market_timing_to_signal(signal, &market, window_secs, st.expiry_dampen_last_secs);
 
         if !passes_volatility_filter(&candles, &st.volatility_filter) {
             let vol_detail = compute_return_std_pct(&candles, st.volatility_filter.sample_bars)
@@ -242,12 +231,7 @@ pub async fn run_cycle(
                     )
                 })
                 .unwrap_or_else(|| "vol_std_pct=unknown".to_string());
-            log_skip_decision(
-                logger,
-                &market,
-                "volatility_filter",
-                Some(vol_detail),
-            );
+            log_skip_decision(logger, &market, "volatility_filter", Some(vol_detail));
             info!(
                 condition_id = %market.condition_id,
                 question = %market.question,
@@ -256,8 +240,7 @@ pub async fn run_cycle(
             continue;
         }
 
-        let volatility_std_pct =
-            compute_return_std_pct(&candles, st.volatility_filter.sample_bars);
+        let volatility_std_pct = compute_return_std_pct(&candles, st.volatility_filter.sample_bars);
 
         if st.htf_enabled {
             match spot
@@ -324,8 +307,7 @@ pub async fn run_cycle(
             );
             info!(
                 "skip: signal confidence too low (confidence={}, threshold={})",
-                signal.confidence,
-                eff_min_confidence
+                signal.confidence, eff_min_confidence
             );
             continue;
         }
@@ -333,12 +315,7 @@ pub async fn run_cycle(
         let direction = match market_matcher::match_signal_to_market(&signal, &market) {
             Some(dir) => dir,
             None => {
-                log_skip_decision(
-                    logger,
-                    &market,
-                    "cannot_match_market_question",
-                    None,
-                );
+                log_skip_decision(logger, &market, "cannot_match_market_question", None);
                 info!(
                     condition_id = %market.condition_id,
                     question = %market.question,
@@ -348,11 +325,7 @@ pub async fn run_cycle(
             }
         };
 
-        let edge_result = edge::calculate(
-            signal.probability,
-            market.yes_price,
-            eff_min_edge,
-        );
+        let edge_result = edge::calculate(signal.probability, market.yes_price, eff_min_edge);
 
         let Some(mut trade) = edge_result else {
             log_skip_decision(
@@ -400,7 +373,10 @@ pub async fn run_cycle(
                 logger,
                 &market,
                 "order_size_below_minimum",
-                Some(format!("size_usdc={}, min_order_usdc={}", size_usdc, st.min_order_usdc)),
+                Some(format!(
+                    "size_usdc={}, min_order_usdc={}",
+                    size_usdc, st.min_order_usdc
+                )),
             );
             info!(
                 condition_id = %market.condition_id,
@@ -483,9 +459,7 @@ pub async fn run_cycle(
                 record.balance_at_trade = Some(balance.to_string());
                 record.daily_loss_at_trade = Some(risk.daily_loss().to_string());
                 record.htf_aligned = htf_aligned;
-                record.adaptive_min_edge = st
-                    .adaptive_thresholds
-                    .then(|| eff_min_edge.to_string());
+                record.adaptive_min_edge = st.adaptive_thresholds.then(|| eff_min_edge.to_string());
                 record.adaptive_min_confidence = st
                     .adaptive_thresholds
                     .then(|| eff_min_confidence.to_string());

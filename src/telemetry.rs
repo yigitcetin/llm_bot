@@ -32,8 +32,8 @@ pub fn init_tracing() -> Result<()> {
     let otel_on = !endpoint.is_empty();
 
     if otel_on {
-        let service_name = std::env::var("OTEL_SERVICE_NAME")
-            .unwrap_or_else(|_| "polymarket-llm-bot".to_string());
+        let service_name =
+            std::env::var("OTEL_SERVICE_NAME").unwrap_or_else(|_| "polymarket-llm-bot".to_string());
 
         let exporter = opentelemetry_otlp::SpanExporter::builder()
             .with_tonic()
@@ -42,7 +42,10 @@ pub fn init_tracing() -> Result<()> {
             .context("failed to build OTLP span exporter")?;
 
         let provider = TracerProvider::builder()
-            .with_resource(Resource::new(vec![KeyValue::new("service.name", service_name)]))
+            .with_resource(Resource::new(vec![KeyValue::new(
+                "service.name",
+                service_name,
+            )]))
             .with_batch_exporter(exporter, opentelemetry_sdk::runtime::Tokio)
             .build();
 

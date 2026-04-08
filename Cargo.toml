@@ -42,8 +42,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 # Time
 chrono = { version = "0.4", features = ["serde"] }
 
-# Config from env
+# Config from env + optional config.toml
 dotenvy = "0.15"
+toml = "0.8"
 
 # Rate limiting
 tokio-util = "0.7"

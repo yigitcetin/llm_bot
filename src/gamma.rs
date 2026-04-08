@@ -252,12 +252,10 @@ fn parse_market(
         .and_then(parse_gamma_datetime)
         .or_else(|| raw.end_date.as_deref().and_then(parse_gamma_datetime))
         .map(|dt| dt.timestamp_millis())
-        .or_else(|| {
-            match (slug_epoch_secs, duration_secs) {
-                (Some(start), Some(dur)) => Some((start + dur) * 1000),
-                (Some(start), None) => Some(start * 1000),
-                _ => None,
-            }
+        .or_else(|| match (slug_epoch_secs, duration_secs) {
+            (Some(start), Some(dur)) => Some((start + dur) * 1000),
+            (Some(start), None) => Some(start * 1000),
+            _ => None,
         })?;
 
     let (yes_price, no_price) = parse_yes_no_prices(
@@ -270,7 +268,8 @@ fn parse_market(
         return None;
     }
 
-    let liquidity: Decimal = raw.liquidity
+    let liquidity: Decimal = raw
+        .liquidity
         .as_deref()
         .and_then(|s| s.parse().ok())
         .unwrap_or(Decimal::ZERO);
@@ -288,8 +287,7 @@ fn parse_market(
 }
 
 fn parse_gamma_datetime(s: &str) -> Option<chrono::DateTime<chrono::FixedOffset>> {
-    chrono::DateTime::parse_from_rfc3339(s)
-        .ok()
+    chrono::DateTime::parse_from_rfc3339(s).ok()
 }
 
 fn parse_slug_epoch_secs(slug: &str) -> Option<i64> {
@@ -297,10 +295,16 @@ fn parse_slug_epoch_secs(slug: &str) -> Option<i64> {
 }
 
 fn duration_to_secs(duration: &str) -> Option<i64> {
-    if let Some(mins) = duration.strip_suffix('m').and_then(|s| s.parse::<i64>().ok()) {
+    if let Some(mins) = duration
+        .strip_suffix('m')
+        .and_then(|s| s.parse::<i64>().ok())
+    {
         return Some(mins * 60);
     }
-    if let Some(hours) = duration.strip_suffix('h').and_then(|s| s.parse::<i64>().ok()) {
+    if let Some(hours) = duration
+        .strip_suffix('h')
+        .and_then(|s| s.parse::<i64>().ok())
+    {
         return Some(hours * 3600);
     }
     None
@@ -318,8 +322,14 @@ mod tests {
             end_date_iso: Some("2099-01-01T00:00:00Z".to_string()),
             end_date: None,
             tokens: Some(vec![
-                GammaToken { outcome: "YES".to_string(), price: "0.55".to_string() },
-                GammaToken { outcome: "NO".to_string(),  price: "0.45".to_string() },
+                GammaToken {
+                    outcome: "YES".to_string(),
+                    price: "0.55".to_string(),
+                },
+                GammaToken {
+                    outcome: "NO".to_string(),
+                    price: "0.45".to_string(),
+                },
             ]),
             outcomes: None,
             outcome_prices: None,

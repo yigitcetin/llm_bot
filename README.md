@@ -31,7 +31,7 @@ Canlı döngü (`trading_loop`) her pazar için: likidite ve fiyat bantları →
 | Parça | Rol |
 |--------|-----|
 | **`polymarket_llm_bot` (lib)** | Strateji, istemciler, analiz; `trading_loop` ana tarama döngüsü |
-| **Binary `polymarket-llm-bot`** | `.env`, isteğe bağlı OpenTelemetry / Prometheus, sonsuz döngü |
+| **Binary `polymarket-llm-bot`** | `.env` (secret), `config.toml` (strateji), isteğe bağlı OpenTelemetry / Prometheus, sonsuz döngü |
 | **`signals`** | Wilder RSI, MACD, momentum kümesi, spot hacim oranı; `TechnicalSignal` |
 | **`edge`** | Piyasa fiyatına karşı edge; Kelly benzeri pozisyon USDC |
 | **`risk`** | Günlük kayıp limiti, pazar başına tek açık pozisyon |
@@ -45,13 +45,25 @@ Canlı döngü (`trading_loop`) her pazar için: likidite ve fiyat bantları →
 
 ```bash
 cp env.example .env
-# .env: en azından POLYMARKET_PRIVATE_KEY ve strateji değişkenleri
+# `.env`: yalnızca secret'lar (private key, isteğe bağlı funder / Builder API)
+# Strateji parametreleri: kökteki `config.toml` (repoda; commitlenebilir)
 
 cargo build --release
 cargo run --release
 ```
 
 Varsayılan binary adı: `polymarket-llm-bot` (`Cargo.toml` içinde `default-run`).
+
+### Yapılandırma: `config.toml` + `.env`
+
+| Dosya | İçerik | Git |
+|--------|--------|-----|
+| **`config.toml`** | `ASSETS`, `MIN_EDGE`, mum/gösterge, risk, `[asset.btc]` / `[asset.eth]` vb. | Evet (örnek değerler) |
+| **`.env`** | `POLYMARKET_PRIVATE_KEY`, isteğe bağlı `FUNDER_ADDRESS`, `BUILDER_API_*` | Hayır (`.gitignore`) |
+
+**Öncelik:** ortam değişkeni `>` `config.toml` `>` kod varsayılanı. Hızlı deneme için: `export MIN_EDGE=0.11` ile `config.toml` üzerine yazılır.
+
+İsteğe bağlı: `CONFIG_PATH=/yol/ozel.toml` ile farklı bir TOML dosyası verilebilir.
 
 ## Dry run
 
@@ -111,7 +123,7 @@ Proje **polymarket-client-sdk** kullanır (`clob`, `gamma`, `ctf`).
 | `HTF_*` | bkz. `env.example` | Üst zaman dilimi trend filtresi |
 | `ADAPTIVE_THRESHOLDS` / `ADAPTIVE_TRADE_WINDOW` | false / 50 | Son işlemlere göre eşik ayarı |
 
-Tam liste ve örnekler için **`env.example`** dosyasına bakın.
+Tam env anahtar listesi için **`env.example`**; strateji alanları ve per-asset örnekleri için **`config.toml`** dosyasına bakın.
 
 ## Kalibrasyon
 

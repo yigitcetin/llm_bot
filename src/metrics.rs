@@ -382,12 +382,18 @@ mod tests {
             .collect();
         assert_eq!(rows.len(), 2);
 
-        let t1 = rows.iter().find(|t| t.order_id == "order-a").expect("order-a");
+        let t1 = rows
+            .iter()
+            .find(|t| t.order_id == "order-a")
+            .expect("order-a");
         assert_eq!(t1.outcome, Some(false));
         assert_eq!(t1.pnl.as_deref(), Some("7.5"));
         assert!(t1.resolved_at.is_some());
 
-        let t2 = rows.iter().find(|t| t.order_id == "order-b").expect("order-b");
+        let t2 = rows
+            .iter()
+            .find(|t| t.order_id == "order-b")
+            .expect("order-b");
         assert!(t2.outcome.is_none());
         assert!(t2.pnl.is_none());
         assert!(t2.resolved_at.is_none());
@@ -418,25 +424,26 @@ mod tests {
             .update_trade_resolution("0xc1", "ord-1", true, dec!(15))
             .expect("first update");
         let after_first = fs::read_to_string(dir.join("trades.jsonl")).expect("read");
-        let pnl_first: String = serde_json::from_str::<TradeRecord>(
-            after_first.lines().next().expect("line"),
-        )
-        .expect("parse")
-        .pnl
-        .expect("pnl");
+        let pnl_first: String =
+            serde_json::from_str::<TradeRecord>(after_first.lines().next().expect("line"))
+                .expect("parse")
+                .pnl
+                .expect("pnl");
 
         logger
             .update_trade_resolution("0xc1", "ord-1", false, dec!(99))
             .expect("second update noop");
         let after_second = fs::read_to_string(dir.join("trades.jsonl")).expect("read");
-        let pnl_second: String = serde_json::from_str::<TradeRecord>(
-            after_second.lines().next().expect("line"),
-        )
-        .expect("parse")
-        .pnl
-        .expect("pnl");
+        let pnl_second: String =
+            serde_json::from_str::<TradeRecord>(after_second.lines().next().expect("line"))
+                .expect("parse")
+                .pnl
+                .expect("pnl");
 
-        assert_eq!(pnl_first, pnl_second, "already resolved row must not be overwritten");
+        assert_eq!(
+            pnl_first, pnl_second,
+            "already resolved row must not be overwritten"
+        );
 
         let _ = fs::remove_dir_all(&dir);
     }

@@ -57,7 +57,8 @@ fn main() -> Result<()> {
     }
 
     let path = format!("{}/trades.jsonl", data_dir);
-    let trades = read_trades_from_path(&path).with_context(|| format!("failed to read {}", path))?;
+    let trades =
+        read_trades_from_path(&path).with_context(|| format!("failed to read {}", path))?;
 
     if trades.is_empty() {
         println!("No trades in {}.", path);
@@ -77,13 +78,7 @@ fn main() -> Result<()> {
     for t in trades.iter().rev().take(recent_n) {
         println!(
             "{} | {} {} | edge={} conf={} | outcome={:?} pnl={:?}",
-            t.timestamp,
-            t.asset,
-            t.direction,
-            t.edge,
-            t.confidence,
-            t.outcome,
-            t.pnl
+            t.timestamp, t.asset, t.direction, t.edge, t.confidence, t.outcome, t.pnl
         );
     }
 
@@ -96,7 +91,10 @@ fn parse_dec(s: &str) -> Option<Decimal> {
 
 fn trade_won(t: &TradeRecord) -> Option<bool> {
     let outcome = t.outcome?;
-    Some(matches!((t.direction.as_str(), outcome), ("YES", true) | ("NO", false)))
+    Some(matches!(
+        (t.direction.as_str(), outcome),
+        ("YES", true) | ("NO", false)
+    ))
 }
 
 fn print_summary(trades: &[TradeRecord]) {
@@ -106,8 +104,15 @@ fn print_summary(trades: &[TradeRecord]) {
         println!("Resolved trades: 0 (no outcomes yet)");
         return;
     }
-    let wins = resolved.iter().filter(|t| trade_won(t).unwrap_or(false)).count();
-    println!("Resolved trades: {} | win rate: {:.1}%", n, 100.0 * wins as f64 / n as f64);
+    let wins = resolved
+        .iter()
+        .filter(|t| trade_won(t).unwrap_or(false))
+        .count();
+    println!(
+        "Resolved trades: {} | win rate: {:.1}%",
+        n,
+        100.0 * wins as f64 / n as f64
+    );
 }
 
 fn by_key<F: Fn(&TradeRecord) -> String>(trades: &[TradeRecord], label: &str, key: F) {
@@ -126,7 +131,13 @@ fn by_key<F: Fn(&TradeRecord) -> String>(trades: &[TradeRecord], label: &str, ke
     }
     println!("\n--- Win rate by {} ---", label);
     for (k, (tot, w)) in map {
-        println!("  {}: {} / {} ({:.1}%)", k, w, tot, 100.0 * w as f64 / tot as f64);
+        println!(
+            "  {}: {} / {} ({:.1}%)",
+            k,
+            w,
+            tot,
+            100.0 * w as f64 / tot as f64
+        );
     }
 }
 
@@ -168,7 +179,10 @@ fn edge_buckets(trades: &[TradeRecord]) {
                 k, agg.wins, agg.total, wr, mean, agg.pnl_n
             );
         } else {
-            println!("  {}: {} / {} ({:.1}%)  mean_pnl=n/a", k, agg.wins, agg.total, wr);
+            println!(
+                "  {}: {} / {} ({:.1}%)  mean_pnl=n/a",
+                k, agg.wins, agg.total, wr
+            );
         }
     }
 }
@@ -211,7 +225,10 @@ fn confidence_buckets(trades: &[TradeRecord]) {
                 k, agg.wins, agg.total, wr, mean, agg.pnl_n
             );
         } else {
-            println!("  {}: {} / {} ({:.1}%)  mean_pnl=n/a", k, agg.wins, agg.total, wr);
+            println!(
+                "  {}: {} / {} ({:.1}%)  mean_pnl=n/a",
+                k, agg.wins, agg.total, wr
+            );
         }
     }
 }
@@ -291,7 +308,10 @@ fn telemetry_buckets(trades: &[TradeRecord]) {
                     k, agg.wins, agg.total, wr, mean, agg.pnl_n
                 );
             } else {
-                println!("  {}: {} / {} ({:.1}%)  mean_pnl=n/a", k, agg.wins, agg.total, wr);
+                println!(
+                    "  {}: {} / {} ({:.1}%)  mean_pnl=n/a",
+                    k, agg.wins, agg.total, wr
+                );
             }
         }
     }
@@ -319,7 +339,10 @@ fn telemetry_buckets(trades: &[TradeRecord]) {
                     k, agg.wins, agg.total, wr, mean, agg.pnl_n
                 );
             } else {
-                println!("  {}: {} / {} ({:.1}%)  mean_pnl=n/a", k, agg.wins, agg.total, wr);
+                println!(
+                    "  {}: {} / {} ({:.1}%)  mean_pnl=n/a",
+                    k, agg.wins, agg.total, wr
+                );
             }
         }
     }
@@ -327,7 +350,9 @@ fn telemetry_buckets(trades: &[TradeRecord]) {
     has_any = false;
     let mut vs_m: BTreeMap<&'static str, BucketAgg> = BTreeMap::new();
     for t in &resolved {
-        let Some(v) = t.volatility_std_pct else { continue };
+        let Some(v) = t.volatility_std_pct else {
+            continue;
+        };
         has_any = true;
         let b = vol_std_bucket(v);
         let e = vs_m.entry(b).or_default();
@@ -347,7 +372,10 @@ fn telemetry_buckets(trades: &[TradeRecord]) {
                     k, agg.wins, agg.total, wr, mean, agg.pnl_n
                 );
             } else {
-                println!("  {}: {} / {} ({:.1}%)  mean_pnl=n/a", k, agg.wins, agg.total, wr);
+                println!(
+                    "  {}: {} / {} ({:.1}%)  mean_pnl=n/a",
+                    k, agg.wins, agg.total, wr
+                );
             }
         }
     }
@@ -375,7 +403,10 @@ fn telemetry_buckets(trades: &[TradeRecord]) {
                     k, agg.wins, agg.total, wr, mean, agg.pnl_n
                 );
             } else {
-                println!("  {}: {} / {} ({:.1}%)  mean_pnl=n/a", k, agg.wins, agg.total, wr);
+                println!(
+                    "  {}: {} / {} ({:.1}%)  mean_pnl=n/a",
+                    k, agg.wins, agg.total, wr
+                );
             }
         }
     }

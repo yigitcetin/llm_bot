@@ -6,8 +6,8 @@ use crate::types::{Direction, Market};
 /// Type of prediction market question
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum MarketType {
-    UpQuestion,     // "Will X be UP?"
-    DownQuestion,   // "Will X be DOWN?"
+    UpQuestion,   // "Will X be UP?"
+    DownQuestion, // "Will X be DOWN?"
     Unknown,
 }
 
@@ -39,10 +39,7 @@ pub fn parse_market_question(question: &str) -> MarketType {
 /// - If signal says UP and market asks "Will X be DOWN?" → BUY NO
 /// - If signal says DOWN and market asks "Will X be DOWN?" → BUY YES
 /// - If signal says DOWN and market asks "Will X be UP?" → BUY NO
-pub fn match_signal_to_market(
-    signal: &TechnicalSignal,
-    market: &Market,
-) -> Option<Direction> {
+pub fn match_signal_to_market(signal: &TechnicalSignal, market: &Market) -> Option<Direction> {
     let market_type = parse_market_question(&market.question);
 
     debug!(
@@ -224,9 +221,18 @@ mod tests {
         let market2 = mock_market("Will BTC be up?");
         let market3 = mock_market("Will BTC be Up?");
 
-        assert_eq!(parse_market_question(&market1.question), MarketType::UpQuestion);
-        assert_eq!(parse_market_question(&market2.question), MarketType::UpQuestion);
-        assert_eq!(parse_market_question(&market3.question), MarketType::UpQuestion);
+        assert_eq!(
+            parse_market_question(&market1.question),
+            MarketType::UpQuestion
+        );
+        assert_eq!(
+            parse_market_question(&market2.question),
+            MarketType::UpQuestion
+        );
+        assert_eq!(
+            parse_market_question(&market3.question),
+            MarketType::UpQuestion
+        );
     }
 
     #[test]
@@ -234,16 +240,32 @@ mod tests {
         // Test all 4 valid combinations
         let combos = vec![
             (SignalDirection::Up, "Will BTC be UP?", Some(Direction::Yes)),
-            (SignalDirection::Up, "Will BTC be DOWN?", Some(Direction::No)),
-            (SignalDirection::Down, "Will BTC be DOWN?", Some(Direction::Yes)),
-            (SignalDirection::Down, "Will BTC be UP?", Some(Direction::No)),
+            (
+                SignalDirection::Up,
+                "Will BTC be DOWN?",
+                Some(Direction::No),
+            ),
+            (
+                SignalDirection::Down,
+                "Will BTC be DOWN?",
+                Some(Direction::Yes),
+            ),
+            (
+                SignalDirection::Down,
+                "Will BTC be UP?",
+                Some(Direction::No),
+            ),
         ];
 
         for (signal_dir, question, expected_dir) in combos {
             let signal = mock_signal(signal_dir);
             let market = mock_market(question);
             let result = match_signal_to_market(&signal, &market);
-            assert_eq!(result, expected_dir, "Failed for {:?} + {}", signal_dir, question);
+            assert_eq!(
+                result, expected_dir,
+                "Failed for {:?} + {}",
+                signal_dir, question
+            );
         }
     }
 

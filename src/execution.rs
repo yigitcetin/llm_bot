@@ -49,7 +49,10 @@ impl Executor {
         }
 
         // Parse private key
-        let signer = match cfg.polymarket_private_key.parse::<alloy::signers::local::PrivateKeySigner>() {
+        let signer = match cfg
+            .polymarket_private_key
+            .parse::<alloy::signers::local::PrivateKeySigner>()
+        {
             Ok(s) => s.with_chain_id(Some(cfg.chain_id)),
             Err(e) => {
                 warn!(error = %e, "failed to parse POLYMARKET_PRIVATE_KEY — falling back to dry-run");
@@ -134,8 +137,9 @@ impl Executor {
                 passphrase.clone(),
             ) {
                 (Ok(api_key), api_secret, api_pass) => {
-                    let builder_credentials =
-                        polymarket_client_sdk::auth::Credentials::new(api_key, api_secret, api_pass);
+                    let builder_credentials = polymarket_client_sdk::auth::Credentials::new(
+                        api_key, api_secret, api_pass,
+                    );
                     let builder_config =
                         polymarket_client_sdk::auth::builder::Config::local(builder_credentials);
 
@@ -201,7 +205,7 @@ impl Executor {
 
         let side_str = match trade.direction {
             Direction::Yes => "BUY",
-            Direction::No  => "BUY",
+            Direction::No => "BUY",
         };
 
         // Derive token_id from condition_id and direction
@@ -227,7 +231,11 @@ impl Executor {
 
         let signer = self.signer.as_ref().context("Signer not initialized")?;
 
-        let order_id = match self.clob_client.as_ref().context("CLOB client not initialized")? {
+        let order_id = match self
+            .clob_client
+            .as_ref()
+            .context("CLOB client not initialized")?
+        {
             AuthenticatedClobClient::Normal(client) => {
                 post_fak_market_order(client, signer, token_id, shares).await?
             }
@@ -299,8 +307,8 @@ fn derive_token_id(condition_id: &str, direction: Direction) -> Result<U256> {
     use alloy::primitives::keccak256;
 
     // Parse condition_id as B256
-    let cid_bytes = hex::decode(condition_id.trim_start_matches("0x"))
-        .context("invalid condition_id hex")?;
+    let cid_bytes =
+        hex::decode(condition_id.trim_start_matches("0x")).context("invalid condition_id hex")?;
     if cid_bytes.len() != 32 {
         anyhow::bail!("condition_id must be 32 bytes");
     }
@@ -308,7 +316,7 @@ fn derive_token_id(condition_id: &str, direction: Direction) -> Result<U256> {
     // Index sets for binary markets
     let index_set: u8 = match direction {
         Direction::Yes => 0x01,
-        Direction::No  => 0x02,
+        Direction::No => 0x02,
     };
 
     // Concatenate condition_id + index_set
