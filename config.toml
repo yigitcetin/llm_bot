@@ -3,7 +3,7 @@
 # Override file path: CONFIG_PATH=/path/to/custom.toml
 
 [strategy]
-assets = ["btc", "eth", "sol"]
+assets = ["btc", "eth", "sol", "xrp"]
 durations = ["15m"]
 gamma_tag_id = 102127
 min_edge = "0.10"
