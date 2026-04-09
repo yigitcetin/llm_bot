@@ -153,6 +153,11 @@ mod tests {
             macd_histogram: 0.0,
             volume_ratio: 1.0,
             cluster_direction: "TIE".to_string(),
+            momentum_5m: 0.0,
+            momentum_15m: 0.0,
+            taker_buy_ratio: None,
+            macd_line: 0.0,
+            macd_signal_line: 0.0,
         }
     }
 

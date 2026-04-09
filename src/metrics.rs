@@ -66,6 +66,22 @@ pub struct TradeRecord {
     pub adaptive_min_confidence: Option<String>,
     #[serde(default)]
     pub sizing_cap_hit: Option<String>,
+    #[serde(default)]
+    pub momentum_5m: Option<f64>,
+    #[serde(default)]
+    pub momentum_15m: Option<f64>,
+    #[serde(default)]
+    pub taker_buy_ratio: Option<f64>,
+    #[serde(default)]
+    pub macd_line: Option<f64>,
+    #[serde(default)]
+    pub macd_signal_line: Option<f64>,
+    #[serde(default)]
+    pub question: Option<String>,
+    #[serde(default)]
+    pub slippage_bps: Option<String>,
+    #[serde(default)]
+    pub effective_min_edge: Option<String>,
 }
 
 impl TradeRecord {
@@ -118,6 +134,14 @@ impl TradeRecord {
             adaptive_min_edge: None,
             adaptive_min_confidence: None,
             sizing_cap_hit: None,
+            momentum_5m: None,
+            momentum_15m: None,
+            taker_buy_ratio: None,
+            macd_line: None,
+            macd_signal_line: None,
+            question: None,
+            slippage_bps: None,
+            effective_min_edge: None,
         }
     }
 }

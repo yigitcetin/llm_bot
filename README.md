@@ -36,7 +36,7 @@ Canlı döngü (`trading_loop`) her pazar için: likidite ve fiyat bantları →
 | **`edge`** | Piyasa fiyatına karşı edge; Kelly benzeri pozisyon USDC |
 | **`risk`** | Günlük kayıp limiti, pazar başına tek açık pozisyon |
 | **`backtest`** | Kütüphane: çözülmüş işlemler üzerinde walk-forward / bootstrap |
-| **`signal_extensions`** | `MIN_SECS_TO_CLOSE`, `EXPIRY_DAMPEN_LAST_SECS`, süre parse |
+| **`signal_extensions`** | `MIN_SECS_TO_CLOSE`, `MAX_SECS_TO_CLOSE`, `EXPIRY_DAMPEN_LAST_SECS`, süre parse |
 | **`metrics`** | JSONL: işlemler, atlama nedenleri, emir hataları |
 | **Binary `stats`** | `trades.jsonl` özet istatistikleri |
 | **`prometheus_export`** | `GET /metrics` (isteğe bağlı) |
@@ -58,7 +58,7 @@ Varsayılan binary adı: `polymarket-llm-bot` (`Cargo.toml` içinde `default-run
 
 | Dosya | İçerik | Git |
 |--------|--------|-----|
-| **`config.toml`** | `ASSETS`, `MIN_EDGE`, mum/gösterge, risk, `[asset.btc]` / `[asset.eth]` vb. | Evet (örnek değerler) |
+| **`config.toml`** | `ASSETS`, `MIN_EDGE`, `SLIPPAGE_BPS`, `CLUSTER_TIE_MIN_EDGE_MULTIPLIER`, `BLOCKED_DIRECTION` (per-asset), `MAX_SECS_TO_CLOSE` (per-asset), risk, `[asset.btc]` vb. | Evet (örnek değerler) |
 | **`.env`** | `POLYMARKET_PRIVATE_KEY`, isteğe bağlı `FUNDER_ADDRESS`, `BUILDER_API_*` | Hayır (`.gitignore`) |
 
 **Öncelik:** ortam değişkeni `>` `config.toml` `>` kod varsayılanı. Hızlı deneme için: `export MIN_EDGE=0.11` ile `config.toml` üzerine yazılır.

@@ -40,6 +40,17 @@ pub fn below_min_secs_to_close(market: &Market, min_secs: Option<i64>) -> bool {
     market.secs_to_close() < min
 }
 
+/// If `max_secs` is set and remaining time is above it, skip (too far from expiry / early window).
+pub fn above_max_secs_to_close(market: &Market, max_secs: Option<i64>) -> bool {
+    let Some(max) = max_secs else {
+        return false;
+    };
+    if max <= 0 {
+        return false;
+    }
+    market.secs_to_close() > max
+}
+
 /// Blend `probability` toward `0.5` when inside the last `dampen_last_secs` of the window.
 /// `window_secs` is the full market duration (e.g. 900 for 15m). If unknown, pass `None` to skip dampening.
 pub fn apply_expiry_probability_dampening(
@@ -118,5 +129,22 @@ mod tests {
         };
         assert!(below_min_secs_to_close(&m, Some(60)));
         assert!(!below_min_secs_to_close(&m, Some(10)));
+    }
+
+    #[test]
+    fn above_max_secs_triggers() {
+        let m = Market {
+            condition_id: "x".into(),
+            question: "q".into(),
+            asset: "btc".into(),
+            duration: "15m".into(),
+            yes_price: dec!(0.5),
+            no_price: dec!(0.5),
+            end_date_ms: Utc::now().timestamp_millis() + 800_000,
+            liquidity: dec!(1000),
+        };
+        assert!(above_max_secs_to_close(&m, Some(600)));
+        assert!(!above_max_secs_to_close(&m, Some(900)));
+        assert!(!above_max_secs_to_close(&m, None));
     }
 }

@@ -6,8 +6,9 @@ use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 
 use crate::config_toml::{AssetOverride, TomlRoot};
-use crate::constants::GAMMA_TAG_ID_DEFAULT;
+use crate::constants::{GAMMA_TAG_ID_DEFAULT, SLIPPAGE_BPS};
 use crate::signals::SignalConfig;
+use crate::types::Direction;
 use crate::volatility::VolatilityFilterConfig;
 
 #[derive(Debug, Clone)]
@@ -23,6 +24,8 @@ pub struct AppConfig {
     pub min_edge: Decimal,       // minimum technical prob vs market price gap
     pub min_confidence: Decimal, // minimum technical confidence score
     pub min_order_usdc: Decimal, // minimum order size in USDC
+    /// Slippage fraction added to reference token price (e.g. `0.002` = 0.2%). Also used as CLOB worst-price limit.
+    pub slippage_bps: Decimal,
 
     // Technical Analysis
     pub spot_exchange: String,   // "binance", "coinbase", etc.
@@ -73,6 +76,8 @@ pub struct AppConfig {
 
     /// Skip markets that resolve sooner than this (seconds). `None` = off.
     pub min_secs_to_close: Option<i64>,
+    /// Skip when remaining time exceeds this (seconds; e.g. avoid early-window noise). `None` = off.
+    pub max_secs_to_close: Option<i64>,
     /// Blend probability toward 0.5 in the last N seconds of the window. `None` = off.
     pub expiry_dampen_last_secs: Option<i64>,
     /// Reject if Gamma YES mid &lt; this (illiquid / mispriced tail). `None` = off.
@@ -91,6 +96,8 @@ pub struct AppConfig {
     pub cluster_rsi_overbought: f64,
     pub cluster_mom5_abs: f64,
     pub cluster_mom15_abs: f64,
+    /// When cluster vote is TIE, multiply effective min edge by this before trading.
+    pub cluster_tie_min_edge_multiplier: f64,
 
     /// Parsed `config.toml` for per-asset TOML fallbacks (environment still wins).
     pub(crate) toml: Option<Arc<TomlRoot>>,
@@ -149,6 +156,12 @@ pub struct AssetStrategy {
     pub cluster_rsi_overbought: f64,
     pub cluster_mom5_abs: f64,
     pub cluster_mom15_abs: f64,
+    pub cluster_tie_min_edge_multiplier: f64,
+    /// Slippage fraction for edge sizing and order worst-price limit.
+    pub slippage_bps: Decimal,
+    pub max_secs_to_close: Option<i64>,
+    /// Never take this side for this asset (`None` = allow both).
+    pub blocked_direction: Option<Direction>,
 }
 
 impl AssetStrategy {
@@ -253,6 +266,28 @@ impl AssetStrategy {
                 "CLUSTER_MOM15_ABS_* out of range (0, 0.2], got: {}",
                 self.cluster_mom15_abs
             );
+        }
+        if self.cluster_tie_min_edge_multiplier < 1.0 || self.cluster_tie_min_edge_multiplier > 5.0
+        {
+            anyhow::bail!(
+                "CLUSTER_TIE_MIN_EDGE_MULTIPLIER_* must be in [1.0, 5.0], got: {}",
+                self.cluster_tie_min_edge_multiplier
+            );
+        }
+        if self.slippage_bps <= Decimal::ZERO || self.slippage_bps > dec!(0.05) {
+            anyhow::bail!(
+                "SLIPPAGE_BPS_* must be in (0, 0.05], got: {}",
+                self.slippage_bps
+            );
+        }
+        if let (Some(lo), Some(hi)) = (self.min_secs_to_close, self.max_secs_to_close) {
+            if hi <= lo {
+                anyhow::bail!(
+                    "MAX_SECS_TO_CLOSE_* ({}) must be > MIN_SECS_TO_CLOSE_* ({}) when both are set",
+                    hi,
+                    lo
+                );
+            }
         }
         if self.cheap_token_price_threshold <= Decimal::ZERO
             || self.cheap_token_price_threshold >= dec!(1)
@@ -529,6 +564,34 @@ fn env_toml_asset_opt_i64(
     global
 }
 
+fn parse_direction_str(s: &str) -> Option<Direction> {
+    match s.trim().to_uppercase().as_str() {
+        "YES" => Some(Direction::Yes),
+        "NO" => Some(Direction::No),
+        _ => None,
+    }
+}
+
+/// Per-asset only: `BLOCKED_DIRECTION_BTC=YES` or `[asset.btc] blocked_direction`.
+fn env_toml_asset_opt_direction(
+    key: &str,
+    su: &str,
+    asset: Option<&AssetOverride>,
+) -> Option<Direction> {
+    let k = format!("{key}_{su}");
+    if let Ok(v) = std::env::var(&k) {
+        if !v.trim().is_empty() {
+            return parse_direction_str(&v);
+        }
+    }
+    if let Some(sec) = asset {
+        if let Some(ref s) = sec.blocked_direction {
+            return parse_direction_str(s);
+        }
+    }
+    None
+}
+
 fn vol_std_with_toml(
     prefix: &str,
     su: &str,
@@ -635,6 +698,12 @@ impl AppConfig {
                 "MIN_ORDER_USDC",
                 parse_dec_str(&ts.and_then(|s| s.min_order_usdc.clone())),
                 dec!(5),
+            ),
+
+            slippage_bps: env_toml_decimal(
+                "SLIPPAGE_BPS",
+                parse_dec_str(&ts.and_then(|s| s.slippage_bps.clone())),
+                SLIPPAGE_BPS,
             ),
 
             spot_exchange: env_toml_string(
@@ -753,6 +822,11 @@ impl AppConfig {
                 tc.and_then(|c| c.min_secs_to_close),
             ),
 
+            max_secs_to_close: env_toml_i64(
+                "MAX_SECS_TO_CLOSE",
+                tc.and_then(|c| c.max_secs_to_close),
+            ),
+
             expiry_dampen_last_secs: env_toml_i64(
                 "EXPIRY_DAMPEN_LAST_SECS",
                 tc.and_then(|c| c.expiry_dampen_last_secs),
@@ -809,6 +883,12 @@ impl AppConfig {
                 "CLUSTER_MOM15_ABS",
                 tc.and_then(|c| c.mom15_abs),
                 0.005,
+            ),
+
+            cluster_tie_min_edge_multiplier: env_toml_f64(
+                "CLUSTER_TIE_MIN_EDGE_MULTIPLIER",
+                tc.and_then(|c| c.cluster_tie_min_edge_multiplier),
+                1.0,
             ),
 
             toml: toml_arc,
@@ -1040,6 +1120,24 @@ impl AppConfig {
                 self.cluster_mom15_abs,
                 |x| x.cluster_mom15_abs,
             ),
+            cluster_tie_min_edge_multiplier: env_toml_asset_f64(
+                "CLUSTER_TIE_MIN_EDGE_MULTIPLIER",
+                &su,
+                a,
+                self.cluster_tie_min_edge_multiplier,
+                |x| x.cluster_tie_min_edge_multiplier,
+            ),
+            slippage_bps: env_toml_asset_decimal("SLIPPAGE_BPS", &su, a, self.slippage_bps, |x| {
+                x.slippage_bps.as_ref()
+            }),
+            max_secs_to_close: env_toml_asset_opt_i64(
+                "MAX_SECS_TO_CLOSE",
+                &su,
+                a,
+                self.max_secs_to_close,
+                |x| x.max_secs_to_close,
+            ),
+            blocked_direction: env_toml_asset_opt_direction("BLOCKED_DIRECTION", &su, a),
         }
     }
 
@@ -1113,6 +1211,29 @@ impl AppConfig {
             }
         }
 
+        if self.cluster_tie_min_edge_multiplier < 1.0 || self.cluster_tie_min_edge_multiplier > 5.0
+        {
+            anyhow::bail!(
+                "CLUSTER_TIE_MIN_EDGE_MULTIPLIER must be in [1.0, 5.0], got: {}",
+                self.cluster_tie_min_edge_multiplier
+            );
+        }
+        if self.slippage_bps <= Decimal::ZERO || self.slippage_bps > dec!(0.05) {
+            anyhow::bail!(
+                "SLIPPAGE_BPS must be in (0, 0.05], got: {}",
+                self.slippage_bps
+            );
+        }
+        if let (Some(lo), Some(hi)) = (self.min_secs_to_close, self.max_secs_to_close) {
+            if hi <= lo {
+                anyhow::bail!(
+                    "MAX_SECS_TO_CLOSE ({}) must be > MIN_SECS_TO_CLOSE ({}) when both are set",
+                    hi,
+                    lo
+                );
+            }
+        }
+
         self.validate_polymarket_auth()?;
 
         Ok(())
@@ -1144,6 +1265,7 @@ impl Default for AppConfig {
             min_edge: dec!(0.06),
             min_confidence: dec!(0.70),
             min_order_usdc: dec!(5),
+            slippage_bps: SLIPPAGE_BPS,
             spot_exchange: "binance".to_string(),
             candle_interval: "1m".to_string(),
             candle_lookback: 100,
@@ -1176,6 +1298,7 @@ impl Default for AppConfig {
             adaptive_trade_window: 50,
 
             min_secs_to_close: None,
+            max_secs_to_close: None,
             expiry_dampen_last_secs: None,
             min_market_yes_price: None,
             max_market_yes_price: None,
@@ -1187,6 +1310,7 @@ impl Default for AppConfig {
             cluster_rsi_overbought: 60.0,
             cluster_mom5_abs: 0.003,
             cluster_mom15_abs: 0.005,
+            cluster_tie_min_edge_multiplier: 1.0,
 
             toml: None,
         }
@@ -1209,6 +1333,7 @@ impl SignatureType {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::Direction;
     use rust_decimal_macros::dec;
 
     fn valid_app_config() -> AppConfig {
@@ -1298,5 +1423,27 @@ mod tests {
         st.volatility_filter.min_std_pct = Some(dec!(0.1));
         st.volatility_filter.max_std_pct = Some(dec!(0.05));
         assert!(st.validate().is_err());
+    }
+
+    #[test]
+    fn asset_strategy_rejects_cluster_tie_multiplier_out_of_range() {
+        let mut st = valid_app_config().asset_strategy("btc");
+        st.cluster_tie_min_edge_multiplier = 6.0;
+        assert!(st.validate().is_err());
+    }
+
+    #[test]
+    fn asset_strategy_rejects_max_secs_not_above_min_secs() {
+        let mut st = valid_app_config().asset_strategy("btc");
+        st.min_secs_to_close = Some(600);
+        st.max_secs_to_close = Some(500);
+        assert!(st.validate().is_err());
+    }
+
+    #[test]
+    fn asset_strategy_accepts_blocked_direction() {
+        let mut st = valid_app_config().asset_strategy("btc");
+        st.blocked_direction = Some(Direction::Yes);
+        st.validate().expect("blocked_direction should validate");
     }
 }

@@ -45,6 +45,16 @@ pub struct TechnicalSignal {
     pub volume_ratio: f64,
     /// RSI+momentum cluster vote: `UP`, `DOWN`, or `TIE` when votes tie / no majority.
     pub cluster_direction: String,
+    /// 5-bar momentum (fractional return) used in cluster vote and probability scaling.
+    pub momentum_5m: f64,
+    /// 15-bar momentum (fractional return) used in cluster vote.
+    pub momentum_15m: f64,
+    /// Last candle taker buy / total volume in `[0, 1]` when available (Binance).
+    pub taker_buy_ratio: Option<f64>,
+    /// MACD line at signal time (distinct from histogram).
+    pub macd_line: f64,
+    /// MACD signal line at signal time.
+    pub macd_signal_line: f64,
 }
 
 /// Signal direction from technical analysis
@@ -393,6 +403,8 @@ pub fn generate_signal(candles: &[Candle], config: &SignalConfig) -> SignalResul
         None => "TIE".to_string(),
     };
 
+    let taker_buy_ratio = candles.last().and_then(|c| c.taker_buy_ratio);
+
     Ok(TechnicalSignal {
         direction,
         probability: probability_dec,
@@ -402,6 +414,11 @@ pub fn generate_signal(candles: &[Candle], config: &SignalConfig) -> SignalResul
         macd_histogram: histogram,
         volume_ratio,
         cluster_direction,
+        momentum_5m,
+        momentum_15m,
+        taker_buy_ratio,
+        macd_line,
+        macd_signal_line: signal_line,
     })
 }
 

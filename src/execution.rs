@@ -183,11 +183,13 @@ impl Executor {
     /// Note: We calculate shares manually (USDC / price) to validate minimum size
     /// before submitting. Alternatively, could use Amount::usdc() and let SDK
     /// walk the orderbook, but manual calculation gives us better logging/control.
+    /// `worst_price_limit` is the maximum price for the outcome token (Polymarket CLOB worst-price / slippage cap).
     pub async fn place_order(
         &self,
         market: &Market,
         trade: &TradeSignal,
         size_usdc: Decimal,
+        worst_price_limit: Decimal,
     ) -> Result<String> {
         // Derive shares from USDC and token price
         let shares = if trade.token_price > Decimal::ZERO {
@@ -237,10 +239,10 @@ impl Executor {
             .context("CLOB client not initialized")?
         {
             AuthenticatedClobClient::Normal(client) => {
-                post_fak_market_order(client, signer, token_id, shares).await?
+                post_fak_market_order(client, signer, token_id, shares, worst_price_limit).await?
             }
             AuthenticatedClobClient::Builder(client) => {
-                post_fak_market_order(client, signer, token_id, shares).await?
+                post_fak_market_order(client, signer, token_id, shares, worst_price_limit).await?
             }
         };
 
@@ -254,6 +256,7 @@ async fn post_fak_market_order<K: Kind>(
     signer: &alloy::signers::local::PrivateKeySigner,
     token_id: U256,
     shares: Decimal,
+    worst_price: Decimal,
 ) -> Result<String> {
     let amount = Amount::shares(shares).context("failed to build Amount::shares")?;
 
@@ -261,6 +264,7 @@ async fn post_fak_market_order<K: Kind>(
         .market_order()
         .token_id(token_id)
         .amount(amount)
+        .price(worst_price)
         .side(Side::Buy)
         .order_type(OrderType::FAK)
         .build()

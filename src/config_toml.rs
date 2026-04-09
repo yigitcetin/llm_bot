@@ -33,6 +33,8 @@ pub struct StrategySection {
     pub min_edge: Option<String>,
     pub min_confidence: Option<String>,
     pub min_order_usdc: Option<String>,
+    /// Fraction added to token price for slippage (e.g. `0.002` = 20 bps). Mirrors env `SLIPPAGE_BPS`.
+    pub slippage_bps: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -60,10 +62,14 @@ pub struct ClusterSection {
     pub min_market_yes_price: Option<String>,
     pub max_market_yes_price: Option<String>,
     pub min_secs_to_close: Option<i64>,
+    /// Skip when remaining time exceeds this (too far from expiry). `None` = off.
+    pub max_secs_to_close: Option<i64>,
     pub expiry_dampen_last_secs: Option<i64>,
     pub cheap_token_price_threshold: Option<String>,
     pub cheap_token_max_usdc: Option<String>,
     pub large_order_usdc_hard_cap: Option<String>,
+    /// When cluster vote is TIE, multiply effective `min_edge` by this (default 1.0 = no change).
+    pub cluster_tie_min_edge_multiplier: Option<f64>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -136,6 +142,7 @@ pub struct AssetOverride {
     pub adaptive_thresholds: Option<bool>,
     pub adaptive_trade_window: Option<usize>,
     pub min_secs_to_close: Option<i64>,
+    pub max_secs_to_close: Option<i64>,
     pub expiry_dampen_last_secs: Option<i64>,
     pub min_market_yes_price: Option<String>,
     pub max_market_yes_price: Option<String>,
@@ -147,6 +154,10 @@ pub struct AssetOverride {
     pub cluster_rsi_overbought: Option<f64>,
     pub cluster_mom5_abs: Option<f64>,
     pub cluster_mom15_abs: Option<f64>,
+    pub cluster_tie_min_edge_multiplier: Option<f64>,
+    pub slippage_bps: Option<String>,
+    /// Block this Polymarket side for the asset (`YES` or `NO`).
+    pub blocked_direction: Option<String>,
 }
 
 /// Read and parse `CONFIG_PATH` (default `config.toml`). Missing file → `None`.
@@ -190,5 +201,32 @@ vol_min_std_pct = "0.03"
         let btc = r.asset.as_ref().unwrap().get("btc").expect("btc");
         assert_eq!(btc.min_edge.as_deref(), Some("0.12"));
         assert_eq!(btc.vol_min_std_pct.as_deref(), Some("0.03"));
+    }
+
+    #[test]
+    fn parses_slippage_cluster_tie_and_asset_extras() {
+        let s = r#"
+[strategy]
+slippage_bps = "0.002"
+
+[cluster]
+cluster_tie_min_edge_multiplier = 1.3
+max_secs_to_close = 700
+
+[asset.btc]
+max_secs_to_close = 600
+blocked_direction = "YES"
+"#;
+        let r: TomlRoot = toml::from_str(s).expect("toml");
+        assert_eq!(
+            r.strategy.as_ref().unwrap().slippage_bps.as_deref(),
+            Some("0.002")
+        );
+        let c = r.cluster.as_ref().unwrap();
+        assert_eq!(c.cluster_tie_min_edge_multiplier, Some(1.3));
+        assert_eq!(c.max_secs_to_close, Some(700));
+        let btc = r.asset.as_ref().unwrap().get("btc").expect("btc");
+        assert_eq!(btc.max_secs_to_close, Some(600));
+        assert_eq!(btc.blocked_direction.as_deref(), Some("YES"));
     }
 }

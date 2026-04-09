@@ -1,15 +1,16 @@
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 
-use crate::constants::SLIPPAGE_BPS;
 use crate::types::{Direction, TradeSignal};
 
 /// Calculate edge and direction with slippage protection.
+/// `slippage_bps` is a fraction added to the reference price (e.g. `0.002` for 20 bps).
 /// Returns `None` if edge is below `min_edge`.
 pub fn calculate(
     signal_probability: Decimal,
     market_yes_price: Decimal,
     min_edge: Decimal,
+    slippage_bps: Decimal,
 ) -> Option<TradeSignal> {
     let edge = signal_probability - market_yes_price;
     let abs_edge = edge.abs();
@@ -29,7 +30,7 @@ pub fn calculate(
     };
 
     // Apply slippage: increase price we're willing to pay
-    let token_price_with_slippage = base_price * (dec!(1) + SLIPPAGE_BPS);
+    let token_price_with_slippage = base_price * (dec!(1) + slippage_bps);
 
     // Cap at 0.99 to avoid paying more than token is worth
     let token_price = token_price_with_slippage.min(dec!(0.99));
@@ -207,20 +208,20 @@ mod tests {
 
     #[test]
     fn edge_below_minimum_returns_none() {
-        let result = calculate(dec!(0.55), dec!(0.53), dec!(0.06));
+        let result = calculate(dec!(0.55), dec!(0.53), dec!(0.06), dec!(0.002));
         assert!(result.is_none(), "2% edge should be below 6% minimum");
     }
 
     #[test]
     fn positive_edge_buys_yes() {
-        let result = calculate(dec!(0.65), dec!(0.50), dec!(0.06)).unwrap();
+        let result = calculate(dec!(0.65), dec!(0.50), dec!(0.06), dec!(0.002)).unwrap();
         assert_eq!(result.direction, Direction::Yes);
         assert_eq!(result.edge, dec!(0.15));
     }
 
     #[test]
     fn negative_edge_buys_no() {
-        let result = calculate(dec!(0.35), dec!(0.50), dec!(0.06)).unwrap();
+        let result = calculate(dec!(0.35), dec!(0.50), dec!(0.06), dec!(0.002)).unwrap();
         assert_eq!(result.direction, Direction::No);
         assert_eq!(result.edge, dec!(0.15));
     }
@@ -276,7 +277,7 @@ mod tests {
 
     #[test]
     fn slippage_protection_applied() {
-        let result = calculate(dec!(0.65), dec!(0.50), dec!(0.06)).unwrap();
+        let result = calculate(dec!(0.65), dec!(0.50), dec!(0.06), dec!(0.002)).unwrap();
         // Token price should include slippage
         assert!(result.token_price > dec!(0.50));
         assert!(result.token_price <= dec!(0.99));
@@ -285,7 +286,7 @@ mod tests {
     #[test]
     fn price_cap_at_99_cents() {
         // Very high market price near 1.0
-        let result = calculate(dec!(0.99), dec!(0.98), dec!(0.01)).unwrap();
+        let result = calculate(dec!(0.99), dec!(0.98), dec!(0.01), dec!(0.002)).unwrap();
         // Price with slippage: 0.98 * 1.002 = 0.98196, which is < 0.99
         assert!(result.token_price <= dec!(0.99), "Should cap at 0.99");
         assert!(
@@ -297,12 +298,12 @@ mod tests {
     #[test]
     fn edge_calculation_symmetry() {
         // Positive edge
-        let yes_trade = calculate(dec!(0.70), dec!(0.50), dec!(0.05)).unwrap();
+        let yes_trade = calculate(dec!(0.70), dec!(0.50), dec!(0.05), dec!(0.002)).unwrap();
         assert_eq!(yes_trade.direction, Direction::Yes);
         assert_eq!(yes_trade.edge, dec!(0.20));
 
         // Negative edge (mirror)
-        let no_trade = calculate(dec!(0.30), dec!(0.50), dec!(0.05)).unwrap();
+        let no_trade = calculate(dec!(0.30), dec!(0.50), dec!(0.05), dec!(0.002)).unwrap();
         assert_eq!(no_trade.direction, Direction::No);
         assert_eq!(no_trade.edge, dec!(0.20));
     }

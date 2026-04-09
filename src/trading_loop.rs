@@ -1,12 +1,15 @@
 //! One full scan–analyze–execute cycle (live trading loop). Used by the binary `main`.
 
 use anyhow::Result;
+use futures::future::join_all;
+use rust_decimal::prelude::FromPrimitive;
 use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
+use rust_decimal_macros::dec;
 use tracing::info;
 
 use crate::adaptive;
-use crate::config::AppConfig;
+use crate::config::{AppConfig, AssetStrategy};
 use crate::constants::{MIN_CANDLES_FOR_SIGNAL, MIN_LIQUIDITY_USDC};
 use crate::edge;
 use crate::execution::Executor;
@@ -17,7 +20,8 @@ use crate::metrics::{MetricsLogger, OrderFailureRecord, SkipRecord, TradeRecord}
 use crate::prometheus_export;
 use crate::risk::{RiskManager, TradeBlockReason};
 use crate::signal_extensions::{
-    apply_market_timing_to_signal, below_min_secs_to_close, parse_duration_to_secs,
+    above_max_secs_to_close, apply_market_timing_to_signal, below_min_secs_to_close,
+    parse_duration_to_secs,
 };
 use crate::signals::{compute_volume_ratio, higher_timeframe_aligns};
 use crate::spot_price::SpotPriceClient;
@@ -40,6 +44,116 @@ fn log_skip_decision(
     ));
 }
 
+/// Cheap filters before any Binance HTTP (liquidity, price band, time-to-close, open position).
+/// Logs and returns `false` when the market should be skipped.
+fn passes_pre_candle_filters(
+    market: &Market,
+    st: &AssetStrategy,
+    risk: &RiskManager,
+    logger: &MetricsLogger,
+) -> bool {
+    if risk.has_position(&market.condition_id) {
+        log_skip_decision(logger, market, "already_have_open_position", None);
+        info!(
+            condition_id = %market.condition_id,
+            question = %market.question,
+            "skip: already have open position"
+        );
+        return false;
+    }
+
+    if market.liquidity < MIN_LIQUIDITY_USDC {
+        log_skip_decision(
+            logger,
+            market,
+            "liquidity_too_low",
+            Some(format!(
+                "liquidity={}, min={}",
+                market.liquidity, MIN_LIQUIDITY_USDC
+            )),
+        );
+        info!(
+            condition_id = %market.condition_id,
+            question = %market.question,
+            liquidity = %market.liquidity,
+            min_liquidity = %MIN_LIQUIDITY_USDC,
+            "skip: liquidity too low"
+        );
+        return false;
+    }
+
+    if let Some(lo) = st.min_market_yes_price {
+        if market.yes_price < lo {
+            log_skip_decision(
+                logger,
+                market,
+                "market_yes_price_out_of_band",
+                Some(format!(
+                    "yes_price={}, min_yes_price={}",
+                    market.yes_price, lo
+                )),
+            );
+            info!(
+                condition_id = %market.condition_id,
+                yes_price = %market.yes_price,
+                "skip: YES price below minimum band"
+            );
+            return false;
+        }
+    }
+    if let Some(hi) = st.max_market_yes_price {
+        if market.yes_price > hi {
+            log_skip_decision(
+                logger,
+                market,
+                "market_yes_price_out_of_band",
+                Some(format!(
+                    "yes_price={}, max_yes_price={}",
+                    market.yes_price, hi
+                )),
+            );
+            info!(
+                condition_id = %market.condition_id,
+                yes_price = %market.yes_price,
+                "skip: YES price above maximum band"
+            );
+            return false;
+        }
+    }
+
+    if below_min_secs_to_close(market, st.min_secs_to_close) {
+        log_skip_decision(
+            logger,
+            market,
+            "too_close_to_expiry",
+            st.min_secs_to_close
+                .map(|m| format!("secs_to_close={}, min_secs={}", market.secs_to_close(), m)),
+        );
+        info!(
+            condition_id = %market.condition_id,
+            "skip: too close to market expiry"
+        );
+        return false;
+    }
+
+    if above_max_secs_to_close(market, st.max_secs_to_close) {
+        log_skip_decision(
+            logger,
+            market,
+            "too_far_from_expiry",
+            st.max_secs_to_close
+                .map(|m| format!("secs_to_close={}, max_secs={}", market.secs_to_close(), m)),
+        );
+        info!(
+            condition_id = %market.condition_id,
+            "skip: too far from market expiry (max_secs_to_close)"
+        );
+        return false;
+    }
+
+    true
+}
+
 /// One full scan-analyze-execute cycle.
 pub async fn run_cycle(
     cfg: &AppConfig,
@@ -54,103 +168,69 @@ pub async fn run_cycle(
     prometheus_export::add_markets_scanned(markets.len() as u64);
     info!(count = markets.len(), "markets fetched");
 
+    // Phase 1: cheap filters, then parallel Binance fetches (fan-out).
+    let mut filtered: Vec<(Market, AssetStrategy)> = Vec::new();
     for market in markets {
-        let mut htf_aligned: Option<bool> = None;
         let st = cfg.asset_strategy(&market.asset);
+        if passes_pre_candle_filters(&market, &st, risk, logger) {
+            filtered.push((market, st));
+        }
+    }
+
+    let candle_batches = join_all(filtered.into_iter().map(|(market, st)| async move {
+        if st.htf_enabled {
+            let (primary_res, htf_res) = tokio::join!(
+                spot.fetch_candles_at_exchange(
+                    &market.asset,
+                    &st.candle_interval,
+                    st.candle_lookback,
+                    &st.spot_exchange,
+                ),
+                spot.fetch_candles_at_exchange(
+                    &market.asset,
+                    &st.htf_interval,
+                    st.htf_lookback,
+                    &st.spot_exchange,
+                ),
+            );
+            (market, st, primary_res, Some(htf_res))
+        } else {
+            let primary_res = spot
+                .fetch_candles_at_exchange(
+                    &market.asset,
+                    &st.candle_interval,
+                    st.candle_lookback,
+                    &st.spot_exchange,
+                )
+                .await;
+            (market, st, primary_res, None)
+        }
+    }))
+    .await;
+
+    // Phase 2: sequential signal / edge / risk / order (fan-in).
+    for (market, st, primary_res, htf_res_opt) in candle_batches {
+        let mut htf_aligned: Option<bool> = None;
         let signal_config = st.signal_config();
 
-        if risk.has_position(&market.condition_id) {
-            log_skip_decision(logger, &market, "already_have_open_position", None);
-            info!(
-                condition_id = %market.condition_id,
-                question = %market.question,
-                "skip: already have open position"
-            );
-            continue;
-        }
-
-        if market.liquidity < MIN_LIQUIDITY_USDC {
-            log_skip_decision(
-                logger,
-                &market,
-                "liquidity_too_low",
-                Some(format!(
-                    "liquidity={}, min={}",
-                    market.liquidity, MIN_LIQUIDITY_USDC
-                )),
-            );
-            info!(
-                condition_id = %market.condition_id,
-                question = %market.question,
-                liquidity = %market.liquidity,
-                min_liquidity = %MIN_LIQUIDITY_USDC,
-                "skip: liquidity too low"
-            );
-            continue;
-        }
-
-        if let Some(lo) = st.min_market_yes_price {
-            if market.yes_price < lo {
+        let candles = match primary_res {
+            Ok(c) => c,
+            Err(e) => {
                 log_skip_decision(
                     logger,
                     &market,
-                    "market_yes_price_out_of_band",
-                    Some(format!(
-                        "yes_price={}, min_yes_price={}",
-                        market.yes_price, lo
-                    )),
+                    "candle_fetch_failed",
+                    Some(format!("primary: {e}")),
                 );
                 info!(
                     condition_id = %market.condition_id,
-                    yes_price = %market.yes_price,
-                    "skip: YES price below minimum band"
+                    asset = %market.asset,
+                    error = %e,
+                    "skip: primary candle fetch failed"
                 );
                 continue;
             }
-        }
-        if let Some(hi) = st.max_market_yes_price {
-            if market.yes_price > hi {
-                log_skip_decision(
-                    logger,
-                    &market,
-                    "market_yes_price_out_of_band",
-                    Some(format!(
-                        "yes_price={}, max_yes_price={}",
-                        market.yes_price, hi
-                    )),
-                );
-                info!(
-                    condition_id = %market.condition_id,
-                    yes_price = %market.yes_price,
-                    "skip: YES price above maximum band"
-                );
-                continue;
-            }
-        }
-
-        if below_min_secs_to_close(&market, st.min_secs_to_close) {
-            log_skip_decision(
-                logger,
-                &market,
-                "too_close_to_expiry",
-                st.min_secs_to_close
-                    .map(|m| format!("secs_to_close={}, min_secs={}", market.secs_to_close(), m)),
-            );
-            info!(
-                condition_id = %market.condition_id,
-                "skip: too close to market expiry"
-            );
-            continue;
-        }
-
-        let candles = spot
-            .fetch_candles_at_exchange(
-                &market.asset,
-                &st.candle_interval,
-                st.candle_lookback,
-                &st.spot_exchange,
-            )
-            .await?;
+        };
 
         if candles.len() < MIN_CANDLES_FOR_SIGNAL {
             log_skip_decision(
@@ -243,16 +323,8 @@ pub async fn run_cycle(
         let volatility_std_pct = compute_return_std_pct(&candles, st.volatility_filter.sample_bars);
 
         if st.htf_enabled {
-            match spot
-                .fetch_candles_at_exchange(
-                    &market.asset,
-                    &st.htf_interval,
-                    st.htf_lookback,
-                    &st.spot_exchange,
-                )
-                .await
-            {
-                Ok(htf) => {
+            match htf_res_opt {
+                Some(Ok(htf)) => {
                     if !higher_timeframe_aligns(signal.direction, &htf, st.htf_ema_period) {
                         log_skip_decision(
                             logger,
@@ -272,13 +344,14 @@ pub async fn run_cycle(
                     }
                     htf_aligned = Some(true);
                 }
-                Err(e) => {
+                Some(Err(e)) => {
                     tracing::warn!(
                         error = %e,
                         asset = %market.asset,
                         "HTF candle fetch failed — continuing without HTF filter"
                     );
                 }
+                None => {}
             }
         }
 
@@ -325,7 +398,35 @@ pub async fn run_cycle(
             }
         };
 
-        let edge_result = edge::calculate(signal.probability, market.yes_price, eff_min_edge);
+        if let Some(blocked) = st.blocked_direction {
+            if direction == blocked {
+                log_skip_decision(
+                    logger,
+                    &market,
+                    "direction_blocked",
+                    Some(format!("direction={blocked:?}, asset={}", market.asset)),
+                );
+                info!(
+                    condition_id = %market.condition_id,
+                    ?direction,
+                    "skip: direction blocked for asset"
+                );
+                continue;
+            }
+        }
+
+        let mut edge_min_for_trade = eff_min_edge;
+        if signal.cluster_direction == "TIE" {
+            let mult = Decimal::from_f64(st.cluster_tie_min_edge_multiplier).unwrap_or(dec!(1));
+            edge_min_for_trade = (eff_min_edge * mult).min(dec!(0.50));
+        }
+
+        let edge_result = edge::calculate(
+            signal.probability,
+            market.yes_price,
+            edge_min_for_trade,
+            st.slippage_bps,
+        );
 
         let Some(mut trade) = edge_result else {
             log_skip_decision(
@@ -333,12 +434,13 @@ pub async fn run_cycle(
                 &market,
                 "edge_too_small",
                 Some(format!(
-                    "signal_prob={}, market_yes_price={}, min_edge={} (base={}, adaptive={})",
+                    "signal_prob={}, market_yes_price={}, min_edge={} (base={}, adaptive={}, cluster_tie={})",
                     signal.probability,
                     market.yes_price,
-                    eff_min_edge,
+                    edge_min_for_trade,
                     st.min_edge,
-                    st.adaptive_thresholds
+                    st.adaptive_thresholds,
+                    signal.cluster_direction == "TIE",
                 )),
             );
             info!(
@@ -346,7 +448,7 @@ pub async fn run_cycle(
                 question = %market.question,
                 signal_prob = %signal.probability,
                 market_price = %market.yes_price,
-                threshold = %eff_min_edge,
+                threshold = %edge_min_for_trade,
                 "skip: edge too small"
             );
             continue;
@@ -425,7 +527,10 @@ pub async fn run_cycle(
             "placing order"
         );
 
-        match executor.place_order(&market, &trade, size_usdc).await {
+        match executor
+            .place_order(&market, &trade, size_usdc, trade.token_price)
+            .await
+        {
             Ok(order_id) => {
                 let size_shares = if trade.token_price > Decimal::ZERO {
                     size_usdc / trade.token_price
@@ -464,6 +569,14 @@ pub async fn run_cycle(
                     .adaptive_thresholds
                     .then(|| eff_min_confidence.to_string());
                 record.sizing_cap_hit = Some(sizing.cap_hit.to_string());
+                record.momentum_5m = Some(signal.momentum_5m);
+                record.momentum_15m = Some(signal.momentum_15m);
+                record.taker_buy_ratio = signal.taker_buy_ratio;
+                record.macd_line = Some(signal.macd_line);
+                record.macd_signal_line = Some(signal.macd_signal_line);
+                record.question = Some(market.question.clone());
+                record.slippage_bps = Some(st.slippage_bps.to_string());
+                record.effective_min_edge = Some(edge_min_for_trade.to_string());
                 let _ = logger.log_trade(&record);
 
                 info!(
