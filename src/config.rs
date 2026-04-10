@@ -98,6 +98,10 @@ pub struct AppConfig {
     pub cluster_mom15_abs: f64,
     /// When cluster vote is TIE, multiply effective min edge by this before trading.
     pub cluster_tie_min_edge_multiplier: f64,
+    /// Skip when `|momentum_5m|` &lt; this (fractional). `0` = filter off.
+    pub min_momentum_5m_abs: f64,
+    /// When `taker_buy_ratio` in `[0.45, 0.55]`, multiply effective min edge by this.
+    pub neutral_taker_edge_multiplier: f64,
 
     /// Parsed `config.toml` for per-asset TOML fallbacks (environment still wins).
     pub(crate) toml: Option<Arc<TomlRoot>>,
@@ -157,6 +161,10 @@ pub struct AssetStrategy {
     pub cluster_mom5_abs: f64,
     pub cluster_mom15_abs: f64,
     pub cluster_tie_min_edge_multiplier: f64,
+    /// Skip when `|momentum_5m|` &lt; this (fractional). `0` = filter off.
+    pub min_momentum_5m_abs: f64,
+    /// When `taker_buy_ratio` in `[0.45, 0.55]`, multiply effective min edge by this.
+    pub neutral_taker_edge_multiplier: f64,
     /// Slippage fraction for edge sizing and order worst-price limit.
     pub slippage_bps: Decimal,
     pub max_secs_to_close: Option<i64>,
@@ -272,6 +280,18 @@ impl AssetStrategy {
             anyhow::bail!(
                 "CLUSTER_TIE_MIN_EDGE_MULTIPLIER_* must be in [1.0, 5.0], got: {}",
                 self.cluster_tie_min_edge_multiplier
+            );
+        }
+        if self.min_momentum_5m_abs < 0.0 || self.min_momentum_5m_abs > 0.05 {
+            anyhow::bail!(
+                "MIN_MOMENTUM_5M_ABS_* must be in [0.0, 0.05] (0 = off), got: {}",
+                self.min_momentum_5m_abs
+            );
+        }
+        if self.neutral_taker_edge_multiplier < 1.0 || self.neutral_taker_edge_multiplier > 5.0 {
+            anyhow::bail!(
+                "NEUTRAL_TAKER_EDGE_MULTIPLIER_* must be in [1.0, 5.0], got: {}",
+                self.neutral_taker_edge_multiplier
             );
         }
         if self.slippage_bps <= Decimal::ZERO || self.slippage_bps > dec!(0.05) {
@@ -891,6 +911,18 @@ impl AppConfig {
                 1.0,
             ),
 
+            min_momentum_5m_abs: env_toml_f64(
+                "MIN_MOMENTUM_5M_ABS",
+                tc.and_then(|c| c.min_momentum_5m_abs),
+                0.0008,
+            ),
+
+            neutral_taker_edge_multiplier: env_toml_f64(
+                "NEUTRAL_TAKER_EDGE_MULTIPLIER",
+                tc.and_then(|c| c.neutral_taker_edge_multiplier),
+                1.5,
+            ),
+
             toml: toml_arc,
         };
 
@@ -1127,6 +1159,20 @@ impl AppConfig {
                 self.cluster_tie_min_edge_multiplier,
                 |x| x.cluster_tie_min_edge_multiplier,
             ),
+            min_momentum_5m_abs: env_toml_asset_f64(
+                "MIN_MOMENTUM_5M_ABS",
+                &su,
+                a,
+                self.min_momentum_5m_abs,
+                |x| x.min_momentum_5m_abs,
+            ),
+            neutral_taker_edge_multiplier: env_toml_asset_f64(
+                "NEUTRAL_TAKER_EDGE_MULTIPLIER",
+                &su,
+                a,
+                self.neutral_taker_edge_multiplier,
+                |x| x.neutral_taker_edge_multiplier,
+            ),
             slippage_bps: env_toml_asset_decimal("SLIPPAGE_BPS", &su, a, self.slippage_bps, |x| {
                 x.slippage_bps.as_ref()
             }),
@@ -1216,6 +1262,18 @@ impl AppConfig {
             anyhow::bail!(
                 "CLUSTER_TIE_MIN_EDGE_MULTIPLIER must be in [1.0, 5.0], got: {}",
                 self.cluster_tie_min_edge_multiplier
+            );
+        }
+        if self.min_momentum_5m_abs < 0.0 || self.min_momentum_5m_abs > 0.05 {
+            anyhow::bail!(
+                "MIN_MOMENTUM_5M_ABS must be in [0.0, 0.05] (0 = off), got: {}",
+                self.min_momentum_5m_abs
+            );
+        }
+        if self.neutral_taker_edge_multiplier < 1.0 || self.neutral_taker_edge_multiplier > 5.0 {
+            anyhow::bail!(
+                "NEUTRAL_TAKER_EDGE_MULTIPLIER must be in [1.0, 5.0], got: {}",
+                self.neutral_taker_edge_multiplier
             );
         }
         if self.slippage_bps <= Decimal::ZERO || self.slippage_bps > dec!(0.05) {
@@ -1311,6 +1369,8 @@ impl Default for AppConfig {
             cluster_mom5_abs: 0.003,
             cluster_mom15_abs: 0.005,
             cluster_tie_min_edge_multiplier: 1.0,
+            min_momentum_5m_abs: 0.0,
+            neutral_taker_edge_multiplier: 1.0,
 
             toml: None,
         }

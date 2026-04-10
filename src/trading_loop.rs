@@ -299,6 +299,26 @@ pub async fn run_cycle(
         signal =
             apply_market_timing_to_signal(signal, &market, window_secs, st.expiry_dampen_last_secs);
 
+        if st.min_momentum_5m_abs > 0.0 && signal.momentum_5m.abs() < st.min_momentum_5m_abs {
+            log_skip_decision(
+                logger,
+                &market,
+                "momentum_5m_too_weak",
+                Some(format!(
+                    "momentum_5m={:.6}, min_abs={:.6}",
+                    signal.momentum_5m, st.min_momentum_5m_abs
+                )),
+            );
+            info!(
+                condition_id = %market.condition_id,
+                asset = %market.asset,
+                momentum_5m = signal.momentum_5m,
+                min_abs = st.min_momentum_5m_abs,
+                "skip: |momentum_5m| below minimum"
+            );
+            continue;
+        }
+
         if !passes_volatility_filter(&candles, &st.volatility_filter) {
             let vol_detail = compute_return_std_pct(&candles, st.volatility_filter.sample_bars)
                 .map(|v| {
@@ -419,6 +439,12 @@ pub async fn run_cycle(
         if signal.cluster_direction == "TIE" {
             let mult = Decimal::from_f64(st.cluster_tie_min_edge_multiplier).unwrap_or(dec!(1));
             edge_min_for_trade = (eff_min_edge * mult).min(dec!(0.50));
+        }
+        if let Some(tbr) = signal.taker_buy_ratio {
+            if (0.45..=0.55).contains(&tbr) {
+                let mult = Decimal::from_f64(st.neutral_taker_edge_multiplier).unwrap_or(dec!(1));
+                edge_min_for_trade = (edge_min_for_trade * mult).min(dec!(0.50));
+            }
         }
 
         let edge_result = edge::calculate(

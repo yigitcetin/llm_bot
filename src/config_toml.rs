@@ -70,6 +70,10 @@ pub struct ClusterSection {
     pub large_order_usdc_hard_cap: Option<String>,
     /// When cluster vote is TIE, multiply effective `min_edge` by this (default 1.0 = no change).
     pub cluster_tie_min_edge_multiplier: Option<f64>,
+    /// Skip when `|momentum_5m|` is below this (fractional return). `0` = off.
+    pub min_momentum_5m_abs: Option<f64>,
+    /// When `taker_buy_ratio` is in `[0.45, 0.55]`, multiply effective min edge by this.
+    pub neutral_taker_edge_multiplier: Option<f64>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -158,6 +162,8 @@ pub struct AssetOverride {
     pub slippage_bps: Option<String>,
     /// Block this Polymarket side for the asset (`YES` or `NO`).
     pub blocked_direction: Option<String>,
+    pub min_momentum_5m_abs: Option<f64>,
+    pub neutral_taker_edge_multiplier: Option<f64>,
 }
 
 /// Read and parse `CONFIG_PATH` (default `config.toml`). Missing file → `None`.
@@ -228,5 +234,18 @@ blocked_direction = "YES"
         let btc = r.asset.as_ref().unwrap().get("btc").expect("btc");
         assert_eq!(btc.max_secs_to_close, Some(600));
         assert_eq!(btc.blocked_direction.as_deref(), Some("YES"));
+    }
+
+    #[test]
+    fn parses_momentum_and_neutral_taker_cluster_fields() {
+        let s = r#"
+[cluster]
+min_momentum_5m_abs = 0.0008
+neutral_taker_edge_multiplier = 1.5
+"#;
+        let r: TomlRoot = toml::from_str(s).expect("toml");
+        let c = r.cluster.as_ref().unwrap();
+        assert_eq!(c.min_momentum_5m_abs, Some(0.0008));
+        assert_eq!(c.neutral_taker_edge_multiplier, Some(1.5));
     }
 }

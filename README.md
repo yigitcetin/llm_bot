@@ -58,7 +58,7 @@ Varsayılan binary adı: `polymarket-llm-bot` (`Cargo.toml` içinde `default-run
 
 | Dosya | İçerik | Git |
 |--------|--------|-----|
-| **`config.toml`** | `ASSETS`, `MIN_EDGE`, `SLIPPAGE_BPS`, `CLUSTER_TIE_MIN_EDGE_MULTIPLIER`, `BLOCKED_DIRECTION` (per-asset), `MAX_SECS_TO_CLOSE` (per-asset), risk, `[asset.btc]` vb. | Evet (örnek değerler) |
+| **`config.toml`** | `ASSETS`, `MIN_EDGE`, `SLIPPAGE_BPS`, `CLUSTER_TIE_MIN_EDGE_MULTIPLIER`, `MIN_MOMENTUM_5M_ABS`, `NEUTRAL_TAKER_EDGE_MULTIPLIER`, `BLOCKED_DIRECTION` (per-asset), `MAX_SECS_TO_CLOSE` (per-asset), risk, `[asset.btc]` vb. | Evet (örnek değerler) |
 | **`.env`** | `POLYMARKET_PRIVATE_KEY`, isteğe bağlı `FUNDER_ADDRESS`, `BUILDER_API_*` | Hayır (`.gitignore`) |
 
 **Öncelik:** ortam değişkeni `>` `config.toml` `>` kod varsayılanı. Hızlı deneme için: `export MIN_EDGE=0.11` ile `config.toml` üzerine yazılır.
