@@ -12,6 +12,10 @@ pub struct Market {
     pub no_price: Decimal,
     pub end_date_ms: i64,
     pub liquidity: Decimal,
+    /// CLOB outcome token id for YES/UP (from Gamma `clobTokenIds`, aligned with outcomes).
+    pub yes_token_id: String,
+    /// CLOB outcome token id for NO/DOWN.
+    pub no_token_id: String,
 }
 
 impl Market {

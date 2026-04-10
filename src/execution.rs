@@ -210,8 +210,13 @@ impl Executor {
             Direction::No => "BUY",
         };
 
-        // Derive token_id from condition_id and direction
-        let token_id = derive_token_id(&market.condition_id, trade.direction)?;
+        let token_id_str = match trade.direction {
+            Direction::Yes => market.yes_token_id.as_str(),
+            Direction::No => market.no_token_id.as_str(),
+        };
+        let token_id: U256 = token_id_str
+            .parse()
+            .context("invalid token_id from Gamma API")?;
 
         info!(
             condition_id = %market.condition_id,
@@ -300,35 +305,4 @@ async fn post_fak_market_order<K: Kind>(
     }
 
     Ok(order_id)
-}
-
-/// Derive token ID from condition_id and direction.
-/// YES token: keccak256(condition_id + index_set_yes)
-/// NO token:  keccak256(condition_id + index_set_no)
-///
-/// For binary markets: index_set_yes = 0x01, index_set_no = 0x02
-fn derive_token_id(condition_id: &str, direction: Direction) -> Result<U256> {
-    use alloy::primitives::keccak256;
-
-    // Parse condition_id as B256
-    let cid_bytes =
-        hex::decode(condition_id.trim_start_matches("0x")).context("invalid condition_id hex")?;
-    if cid_bytes.len() != 32 {
-        anyhow::bail!("condition_id must be 32 bytes");
-    }
-
-    // Index sets for binary markets
-    let index_set: u8 = match direction {
-        Direction::Yes => 0x01,
-        Direction::No => 0x02,
-    };
-
-    // Concatenate condition_id + index_set
-    let mut input = cid_bytes.to_vec();
-    input.push(index_set);
-
-    // Keccak256 hash
-    let hash = keccak256(&input);
-
-    Ok(U256::from_be_bytes(*hash))
 }

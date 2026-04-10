@@ -140,6 +140,8 @@ mod tests {
             no_price: dec!(0.5),
             end_date_ms: 0,
             liquidity: dec!(1000),
+            yes_token_id: "111".into(),
+            no_token_id: "222".into(),
         }
     }
 

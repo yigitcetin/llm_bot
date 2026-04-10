@@ -126,6 +126,8 @@ mod tests {
             no_price: dec!(0.5),
             end_date_ms: Utc::now().timestamp_millis() + 30_000,
             liquidity: dec!(1000),
+            yes_token_id: "1".into(),
+            no_token_id: "2".into(),
         };
         assert!(below_min_secs_to_close(&m, Some(60)));
         assert!(!below_min_secs_to_close(&m, Some(10)));
@@ -142,6 +144,8 @@ mod tests {
             no_price: dec!(0.5),
             end_date_ms: Utc::now().timestamp_millis() + 800_000,
             liquidity: dec!(1000),
+            yes_token_id: "1".into(),
+            no_token_id: "2".into(),
         };
         assert!(above_max_secs_to_close(&m, Some(600)));
         assert!(!above_max_secs_to_close(&m, Some(900)));

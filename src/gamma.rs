@@ -32,6 +32,8 @@ struct GammaMarket {
     pub outcomes: Option<String>,
     pub outcome_prices: Option<String>,
     pub liquidity: Option<String>,
+    /// JSON string array of CLOB token ids, e.g. `"[\"5113…\", \"8147…\"]"`, aligned with `outcomes`.
+    pub clob_token_ids: Option<String>,
     pub closed: Option<bool>,
     pub archived: Option<bool>,
 }
@@ -82,6 +84,40 @@ pub fn parse_yes_no_prices(
     }
 
     (yes_price, no_price)
+}
+
+/// Parse Gamma `clobTokenIds` (JSON string array) into YES and NO token ids using `outcomes` labels.
+/// Falls back to positional mapping when labels are missing: index 0 → yes, index 1 → no.
+fn parse_clob_token_ids(
+    clob_raw: Option<&str>,
+    outcomes_raw: Option<&str>,
+) -> Option<(String, String)> {
+    let ids: Vec<String> = serde_json::from_str(clob_raw?).ok()?;
+    if ids.len() != 2 {
+        return None;
+    }
+
+    if let Some(outcomes_raw) = outcomes_raw {
+        if let Ok(outcomes) = serde_json::from_str::<Vec<String>>(outcomes_raw) {
+            if outcomes.len() == 2 {
+                let mut yes_token: Option<String> = None;
+                let mut no_token: Option<String> = None;
+                for (label, id) in outcomes.iter().zip(ids.iter()) {
+                    match label.to_uppercase().as_str() {
+                        "YES" | "UP" => yes_token = Some(id.clone()),
+                        "NO" | "DOWN" => no_token = Some(id.clone()),
+                        _ => {}
+                    }
+                }
+                if let (Some(y), Some(n)) = (yes_token, no_token) {
+                    return Some((y, n));
+                }
+            }
+        }
+    }
+
+    // Positional fallback: Polymarket binary markets list Up/Yes then Down/No.
+    Some((ids[0].clone(), ids[1].clone()))
 }
 
 // ── Client ────────────────────────────────────────────────────────────────────
@@ -258,6 +294,9 @@ fn parse_market(
             _ => None,
         })?;
 
+    let (yes_token_id, no_token_id) =
+        parse_clob_token_ids(raw.clob_token_ids.as_deref(), raw.outcomes.as_deref())?;
+
     let (yes_price, no_price) = parse_yes_no_prices(
         raw.tokens.as_deref(),
         raw.outcomes.as_deref(),
@@ -283,6 +322,8 @@ fn parse_market(
         no_price,
         end_date_ms,
         liquidity,
+        yes_token_id,
+        no_token_id,
     })
 }
 
@@ -334,12 +375,15 @@ mod tests {
             outcomes: None,
             outcome_prices: None,
             liquidity: Some("5000".to_string()),
+            clob_token_ids: Some(r#"["111111111111111111","222222222222222222"]"#.to_string()),
             closed: Some(false),
             archived: Some(false),
         };
         let m = parse_market(raw, "btc", "5m", None, Some(300)).unwrap();
         assert_eq!(m.asset, "btc");
         assert_eq!(m.yes_price.to_string(), "0.55");
+        assert_eq!(m.yes_token_id, "111111111111111111");
+        assert_eq!(m.no_token_id, "222222222222222222");
     }
 
     #[test]
@@ -353,9 +397,39 @@ mod tests {
             outcomes: None,
             outcome_prices: None,
             liquidity: None,
+            clob_token_ids: Some(r#"["1","2"]"#.to_string()),
             closed: None,
             archived: None,
         };
         assert!(parse_market(raw, "btc", "5m", None, Some(300)).is_none());
+    }
+
+    #[test]
+    fn parse_clob_token_ids_maps_up_down_labels() {
+        let raw = GammaMarket {
+            condition_id: Some("0xabc".to_string()),
+            question: Some("Up or down?".to_string()),
+            end_date_iso: Some("2099-01-01T00:00:00Z".to_string()),
+            end_date: None,
+            tokens: Some(vec![
+                GammaToken {
+                    outcome: "Up".to_string(),
+                    price: "0.6".to_string(),
+                },
+                GammaToken {
+                    outcome: "Down".to_string(),
+                    price: "0.4".to_string(),
+                },
+            ]),
+            outcomes: Some(r#"["Up","Down"]"#.to_string()),
+            outcome_prices: None,
+            liquidity: Some("1".to_string()),
+            clob_token_ids: Some(r#"["999","888"]"#.to_string()),
+            closed: Some(false),
+            archived: Some(false),
+        };
+        let m = parse_market(raw, "eth", "5m", None, Some(300)).unwrap();
+        assert_eq!(m.yes_token_id, "999");
+        assert_eq!(m.no_token_id, "888");
     }
 }
