@@ -1,5 +1,5 @@
 use rust_decimal::Decimal;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use tracing::warn;
 
@@ -31,6 +31,10 @@ pub struct RiskManager {
     daily_loss_limit: Decimal,
     daily_loss: Decimal,
     open_positions: HashMap<String, OpenPosition>,
+    /// USDC reserved for GTD limit orders not yet confirmed filled (`condition_id` -> amount).
+    reserved_usdc: HashMap<String, Decimal>,
+    /// Markets with a resting order (reserved) — blocks duplicate signals until fill/cancel.
+    reserved_markets: HashSet<String>,
     last_reset: chrono::NaiveDate,
 }
 
@@ -41,6 +45,8 @@ impl RiskManager {
             daily_loss_limit: cfg.initial_balance * cfg.daily_loss_limit_pct,
             daily_loss: Decimal::ZERO,
             open_positions: HashMap::new(),
+            reserved_usdc: HashMap::new(),
+            reserved_markets: HashSet::new(),
             last_reset: chrono::Utc::now().date_naive(),
         }
     }
@@ -64,6 +70,10 @@ impl RiskManager {
         }
 
         if self.open_positions.contains_key(condition_id) {
+            return Some(TradeBlockReason::DuplicateMarket);
+        }
+
+        if self.reserved_markets.contains(condition_id) {
             return Some(TradeBlockReason::DuplicateMarket);
         }
 
@@ -105,11 +115,41 @@ impl RiskManager {
         self.daily_loss
     }
 
-    /// Call when an order is placed.
+    /// Reserve `size_usdc` for a resting GTD order (balance decreases; no [`OpenPosition`] yet).
+    pub fn reserve_for_order(&mut self, condition_id: &str, size_usdc: Decimal) {
+        self.balance -= size_usdc;
+        self.reserved_usdc
+            .insert(condition_id.to_string(), size_usdc);
+        self.reserved_markets.insert(condition_id.to_string());
+    }
+
+    /// Release reservation when the order is cancelled/expired without a confirmed position.
+    pub fn release_reservation(&mut self, condition_id: &str) {
+        if let Some(amt) = self.reserved_usdc.remove(condition_id) {
+            self.balance += amt;
+        }
+        self.reserved_markets.remove(condition_id);
+    }
+
+    /// Move reserved USDC into a confirmed [`OpenPosition`] (no net balance change).
+    pub fn confirm_reserved_trade(&mut self, condition_id: &str, position: OpenPosition) {
+        self.reserved_usdc.remove(condition_id);
+        self.reserved_markets.remove(condition_id);
+        self.open_positions
+            .insert(position.condition_id.clone(), position);
+    }
+
+    /// Call when an order is placed and filled immediately (no prior reservation), or dry-run.
     pub fn record_trade(&mut self, size_usdc: Decimal, position: OpenPosition) {
         self.balance -= size_usdc;
         self.open_positions
             .insert(position.condition_id.clone(), position);
+    }
+
+    /// True if we have an open position or reserved resting order for this market.
+    pub fn has_open_or_reserved(&self, condition_id: &str) -> bool {
+        self.open_positions.contains_key(condition_id)
+            || self.reserved_markets.contains(condition_id)
     }
 
     /// Call when a position resolves.
@@ -238,5 +278,62 @@ mod tests {
         assert_eq!(rm.daily_loss(), dec!(15));
         assert!(rm.can_trade(dec!(5), "cid_new", dec!(0.05)));
         assert_eq!(rm.daily_loss(), dec!(0));
+    }
+
+    #[test]
+    fn reserve_for_order_decrements_balance_and_blocks_duplicate() {
+        let mut rm = RiskManager::new(&test_cfg());
+        let start = rm.available_balance();
+        rm.reserve_for_order("cid1", dec!(30));
+        assert_eq!(rm.available_balance(), start - dec!(30));
+        assert!(rm.has_open_or_reserved("cid1"));
+        assert_eq!(
+            rm.trade_block_reason(dec!(5), "cid1", dec!(0.05)),
+            Some(TradeBlockReason::DuplicateMarket)
+        );
+        assert!(!rm.can_trade(dec!(5), "cid1", dec!(0.05)));
+    }
+
+    #[test]
+    fn release_reservation_restores_balance() {
+        let mut rm = RiskManager::new(&test_cfg());
+        let start = rm.available_balance();
+        rm.reserve_for_order("cid1", dec!(25));
+        assert_eq!(rm.available_balance(), start - dec!(25));
+        rm.release_reservation("cid1");
+        assert_eq!(rm.available_balance(), start);
+        assert!(!rm.has_open_or_reserved("cid1"));
+    }
+
+    #[test]
+    fn confirm_reserved_trade_opens_position_without_balance_change() {
+        let mut rm = RiskManager::new(&test_cfg());
+        let start = rm.available_balance();
+        rm.reserve_for_order("cid1", dec!(10));
+        assert_eq!(rm.available_balance(), start - dec!(10));
+
+        let pos = OpenPosition {
+            condition_id: "cid1".to_string(),
+            order_id: "ord1".to_string(),
+            direction: Direction::Yes,
+            entry_price: dec!(0.5),
+            size_usdc: dec!(10),
+            size_shares: dec!(20),
+            end_date_ms: 0,
+        };
+        rm.confirm_reserved_trade("cid1", pos);
+        assert_eq!(rm.available_balance(), start - dec!(10));
+        assert!(rm.has_position("cid1"));
+        assert!(rm.has_open_or_reserved("cid1"));
+    }
+
+    #[test]
+    fn cannot_trade_same_market_after_reserve() {
+        let mut rm = RiskManager::new(&test_cfg());
+        rm.reserve_for_order("cid1", dec!(5));
+        assert_eq!(
+            rm.trade_block_reason(dec!(5), "cid1", dec!(0.05)),
+            Some(TradeBlockReason::DuplicateMarket)
+        );
     }
 }

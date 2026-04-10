@@ -62,6 +62,9 @@ trade_window = 50
 [execution]
 dry_run = true
 cycle_secs = 60
+# GTD lifecycle: cancel resting orders after this many seconds; REST poll only for orders older than poll_min_order_age_secs.
+fill_timeout_secs = 300
+poll_min_order_age_secs = 10
 clob_host = "https://clob.polymarket.com"
 signature_type = "GNOSIS_SAFE"
 data_dir = "data"

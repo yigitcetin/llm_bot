@@ -116,6 +116,10 @@ pub struct ExecutionSection {
     pub clob_host: Option<String>,
     pub signature_type: Option<String>,
     pub data_dir: Option<String>,
+    /// Cancel resting GTD orders after this many seconds if still unmatched.
+    pub fill_timeout_secs: Option<u64>,
+    /// Wait this long after placement before first REST `poll_order` (avoid hammering API).
+    pub poll_min_order_age_secs: Option<u64>,
 }
 
 /// Fields mirror per-asset env keys (`MIN_EDGE_BTC`, …) without the `_ASSET` suffix.

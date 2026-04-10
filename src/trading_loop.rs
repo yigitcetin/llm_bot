@@ -17,6 +17,7 @@ use crate::gamma::GammaClient;
 use crate::indicator_cache::IndicatorCache;
 use crate::market_matcher;
 use crate::metrics::{MetricsLogger, OrderFailureRecord, SkipRecord, TradeRecord};
+use crate::order_tracker::{pending_from_outcome, OrderTracker, PendingTradeMeta};
 use crate::prometheus_export;
 use crate::risk::{RiskManager, TradeBlockReason};
 use crate::signal_extensions::{
@@ -27,6 +28,7 @@ use crate::signals::{compute_volume_ratio, higher_timeframe_aligns};
 use crate::spot_price::SpotPriceClient;
 use crate::types::{Market, OpenPosition};
 use crate::volatility::{compute_return_std_pct, passes_volatility_filter};
+use polymarket_client_sdk::clob::types::OrderStatusType;
 
 fn log_skip_decision(
     logger: &MetricsLogger,
@@ -52,12 +54,12 @@ fn passes_pre_candle_filters(
     risk: &RiskManager,
     logger: &MetricsLogger,
 ) -> bool {
-    if risk.has_position(&market.condition_id) {
+    if risk.has_open_or_reserved(&market.condition_id) {
         log_skip_decision(logger, market, "already_have_open_position", None);
         info!(
             condition_id = %market.condition_id,
             question = %market.question,
-            "skip: already have open position"
+            "skip: already have open position or pending order"
         );
         return false;
     }
@@ -163,6 +165,7 @@ pub async fn run_cycle(
     risk: &mut RiskManager,
     indicator_cache: &mut IndicatorCache,
     logger: &MetricsLogger,
+    order_tracker: &mut OrderTracker,
 ) -> Result<()> {
     let markets = gamma.active_markets(&cfg.assets, &cfg.durations).await?;
     prometheus_export::add_markets_scanned(markets.len() as u64);
@@ -481,9 +484,33 @@ pub async fn run_cycle(
         };
 
         if trade.direction != direction {
-            trade.direction = direction;
-            trade.token_price =
-                edge::token_price_for_direction(market.yes_price, direction, st.slippage_bps);
+            match edge::recalculate_for_direction(
+                signal.probability,
+                market.yes_price,
+                direction,
+                st.slippage_bps,
+                edge_min_for_trade,
+            ) {
+                Some(recalc) => trade = recalc,
+                None => {
+                    log_skip_decision(
+                        logger,
+                        &market,
+                        "no_edge_after_direction_override",
+                        Some(format!(
+                            "signal_prob={}, yes_price={}, forced_dir={:?}",
+                            signal.probability, market.yes_price, direction,
+                        )),
+                    );
+                    info!(
+                        condition_id = %market.condition_id,
+                        question = %market.question,
+                        ?direction,
+                        "skip: no positive edge for market_matcher direction"
+                    );
+                    continue;
+                }
+            }
         }
 
         let balance = risk.available_balance();
@@ -558,77 +585,141 @@ pub async fn run_cycle(
         );
 
         match executor
-            .place_order(&market, &trade, size_usdc, trade.token_price)
+            .place_order(
+                &market,
+                &trade,
+                size_usdc,
+                trade.token_price,
+                market.end_date_ms,
+            )
             .await
         {
-            Ok(order_id) => {
+            Ok(outcome) => {
                 let size_shares = if trade.token_price > Decimal::ZERO {
                     size_usdc / trade.token_price
                 } else {
                     Decimal::ZERO
                 };
 
-                let mut record = TradeRecord::new(
-                    market.condition_id.clone(),
-                    market.asset.clone(),
-                    market.duration.clone(),
-                    trade.direction,
-                    trade.token_price,
-                    size_usdc,
-                    size_shares,
-                    signal.probability,
-                    signal.confidence,
-                    trade.edge,
-                    signal.reasoning.clone(),
-                    order_id.clone(),
-                );
-                record.rsi = Some(signal.rsi);
-                record.macd_histogram = Some(signal.macd_histogram);
-                record.volume_ratio = Some(signal.volume_ratio);
-                record.cluster_direction = Some(signal.cluster_direction.clone());
-                record.market_yes_price = Some(market.yes_price.to_string());
-                record.liquidity = Some(market.liquidity.to_string());
-                record.secs_to_close = Some(market.secs_to_close());
-                record.volatility_std_pct = volatility_std_pct.and_then(|d| d.to_f64());
-                record.kelly_fraction = Some(sizing.kelly_fraction.to_string());
-                record.balance_at_trade = Some(balance.to_string());
-                record.daily_loss_at_trade = Some(risk.daily_loss().to_string());
-                record.htf_aligned = htf_aligned;
-                record.adaptive_min_edge = st.adaptive_thresholds.then(|| eff_min_edge.to_string());
-                record.adaptive_min_confidence = st
-                    .adaptive_thresholds
-                    .then(|| eff_min_confidence.to_string());
-                record.sizing_cap_hit = Some(sizing.cap_hit.to_string());
-                record.momentum_5m = Some(signal.momentum_5m);
-                record.momentum_15m = Some(signal.momentum_15m);
-                record.taker_buy_ratio = signal.taker_buy_ratio;
-                record.macd_line = Some(signal.macd_line);
-                record.macd_signal_line = Some(signal.macd_signal_line);
-                record.question = Some(market.question.clone());
-                record.slippage_bps = Some(st.slippage_bps.to_string());
-                record.effective_min_edge = Some(edge_min_for_trade.to_string());
-                let _ = logger.log_trade(&record);
-
-                info!(
-                    order_id = %order_id,
-                    condition_id = %market.condition_id,
-                    "order placed successfully"
-                );
-
-                if !executor.is_dry_run() {
-                    prometheus_export::record_trade_success();
-                }
-
-                let position = OpenPosition {
-                    condition_id: market.condition_id.clone(),
-                    order_id: order_id.clone(),
+                let meta = PendingTradeMeta {
+                    asset: market.asset.clone(),
+                    duration: market.duration.clone(),
                     direction: trade.direction,
-                    entry_price: trade.token_price,
+                    limit_price: trade.token_price,
                     size_usdc,
                     size_shares,
-                    end_date_ms: market.end_date_ms,
+                    signal_probability: signal.probability,
+                    confidence: signal.confidence,
+                    edge: trade.edge,
+                    reasoning: signal.reasoning.clone(),
+                    rsi: Some(signal.rsi),
+                    macd_histogram: Some(signal.macd_histogram),
+                    volume_ratio: Some(signal.volume_ratio),
+                    cluster_direction: Some(signal.cluster_direction.clone()),
+                    market_yes_price: Some(market.yes_price.to_string()),
+                    liquidity: Some(market.liquidity.to_string()),
+                    secs_to_close: Some(market.secs_to_close()),
+                    volatility_std_pct: volatility_std_pct.and_then(|d| d.to_f64()),
+                    kelly_fraction: Some(sizing.kelly_fraction.to_string()),
+                    balance_at_signal: balance.to_string(),
+                    daily_loss_at_signal: risk.daily_loss().to_string(),
+                    htf_aligned,
+                    adaptive_min_edge: st.adaptive_thresholds.then(|| eff_min_edge.to_string()),
+                    adaptive_min_confidence: st
+                        .adaptive_thresholds
+                        .then(|| eff_min_confidence.to_string()),
+                    sizing_cap_hit: Some(sizing.cap_hit.to_string()),
+                    momentum_5m: Some(signal.momentum_5m),
+                    momentum_15m: Some(signal.momentum_15m),
+                    taker_buy_ratio: signal.taker_buy_ratio,
+                    macd_line: Some(signal.macd_line),
+                    macd_signal_line: Some(signal.macd_signal_line),
+                    question: Some(market.question.clone()),
+                    slippage_bps: Some(st.slippage_bps.to_string()),
+                    effective_min_edge: Some(edge_min_for_trade.to_string()),
                 };
-                risk.record_trade(size_usdc, position);
+
+                let immediate_fill =
+                    executor.is_dry_run() || matches!(outcome.status, OrderStatusType::Matched);
+
+                if immediate_fill {
+                    let mut record = TradeRecord::new(
+                        market.condition_id.clone(),
+                        market.asset.clone(),
+                        market.duration.clone(),
+                        trade.direction,
+                        trade.token_price,
+                        size_usdc,
+                        size_shares,
+                        signal.probability,
+                        signal.confidence,
+                        trade.edge,
+                        signal.reasoning.clone(),
+                        outcome.order_id.clone(),
+                    );
+                    record.rsi = Some(signal.rsi);
+                    record.macd_histogram = Some(signal.macd_histogram);
+                    record.volume_ratio = Some(signal.volume_ratio);
+                    record.cluster_direction = Some(signal.cluster_direction.clone());
+                    record.market_yes_price = Some(market.yes_price.to_string());
+                    record.liquidity = Some(market.liquidity.to_string());
+                    record.secs_to_close = Some(market.secs_to_close());
+                    record.volatility_std_pct = volatility_std_pct.and_then(|d| d.to_f64());
+                    record.kelly_fraction = Some(sizing.kelly_fraction.to_string());
+                    record.balance_at_trade = Some(balance.to_string());
+                    record.daily_loss_at_trade = Some(risk.daily_loss().to_string());
+                    record.htf_aligned = htf_aligned;
+                    record.adaptive_min_edge =
+                        st.adaptive_thresholds.then(|| eff_min_edge.to_string());
+                    record.adaptive_min_confidence = st
+                        .adaptive_thresholds
+                        .then(|| eff_min_confidence.to_string());
+                    record.sizing_cap_hit = Some(sizing.cap_hit.to_string());
+                    record.momentum_5m = Some(signal.momentum_5m);
+                    record.momentum_15m = Some(signal.momentum_15m);
+                    record.taker_buy_ratio = signal.taker_buy_ratio;
+                    record.macd_line = Some(signal.macd_line);
+                    record.macd_signal_line = Some(signal.macd_signal_line);
+                    record.question = Some(market.question.clone());
+                    record.slippage_bps = Some(st.slippage_bps.to_string());
+                    record.effective_min_edge = Some(edge_min_for_trade.to_string());
+                    record.fill_status = Some("filled".to_string());
+                    let _ = logger.log_trade(&record);
+
+                    info!(
+                        order_id = %outcome.order_id,
+                        condition_id = %market.condition_id,
+                        "order placed successfully"
+                    );
+
+                    if !executor.is_dry_run() {
+                        prometheus_export::record_trade_success();
+                    }
+
+                    let position = OpenPosition {
+                        condition_id: market.condition_id.clone(),
+                        order_id: outcome.order_id.clone(),
+                        direction: trade.direction,
+                        entry_price: trade.token_price,
+                        size_usdc,
+                        size_shares,
+                        end_date_ms: market.end_date_ms,
+                    };
+                    risk.record_trade(size_usdc, position);
+                } else {
+                    risk.reserve_for_order(&market.condition_id, size_usdc);
+                    order_tracker.add_pending(pending_from_outcome(
+                        &outcome,
+                        market.condition_id.clone(),
+                        market.end_date_ms,
+                        meta,
+                    ));
+                    info!(
+                        order_id = %outcome.order_id,
+                        condition_id = %market.condition_id,
+                        "GTD order resting — awaiting fill"
+                    );
+                }
             }
             Err(e) => {
                 prometheus_export::record_order_failure();

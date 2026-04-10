@@ -47,6 +47,10 @@ pub struct AppConfig {
     // Execution
     pub dry_run: bool,
     pub cycle_secs: u64,
+    /// Cancel unfilled GTD orders after this many seconds.
+    pub fill_timeout_secs: u64,
+    /// Minimum order age before first REST poll (seconds).
+    pub poll_min_order_age_secs: u64,
 
     // Polymarket
     /// Gamma API `tag_id` filter for listing events (see Polymarket tags).
@@ -789,6 +793,18 @@ impl AppConfig {
                 .or(te.and_then(|e| e.cycle_secs))
                 .unwrap_or(60),
 
+            fill_timeout_secs: std::env::var("FILL_TIMEOUT_SECS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .or(te.and_then(|e| e.fill_timeout_secs))
+                .unwrap_or(300),
+
+            poll_min_order_age_secs: std::env::var("POLL_MIN_ORDER_AGE_SECS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .or(te.and_then(|e| e.poll_min_order_age_secs))
+                .unwrap_or(10),
+
             gamma_tag_id: std::env::var("GAMMA_TAG_ID")
                 .ok()
                 .and_then(|v| v.parse().ok())
@@ -1338,6 +1354,8 @@ impl Default for AppConfig {
             initial_balance: dec!(200),
             dry_run: true,
             cycle_secs: 60,
+            fill_timeout_secs: 300,
+            poll_min_order_age_secs: 10,
             gamma_tag_id: GAMMA_TAG_ID_DEFAULT,
             clob_host: "https://clob.polymarket.com".to_string(),
             chain_id: POLYGON,

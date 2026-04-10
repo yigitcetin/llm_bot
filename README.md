@@ -99,20 +99,7 @@ Proje **polymarket-client-sdk** kullanır (`clob`, `gamma`, `ctf`).
 - **EOA:** Funder genelde cüzdanın kendisidir; `FUNDER_ADDRESS` boş bırakılabilir.
 - **Proxy / Gnosis Safe:** SDK funder’ı CREATE2 ile türetebilir; gerekirse `FUNDER_ADDRESS` ile override.
 - **Builder API:** `BUILDER_API_*` isteğe bağlı; normal işlem için zorunlu değildir.
-
-### `vendor/` klasörü neden var?
-
-Crates.io’daki **polymarket-client-sdk** (şu an 0.4.4) içinde, **FAK/FOK market emirlerinde** maker/taker tutarlarının ondalık kesimi bazen CLOB API’sinin sabit limitlerini aşıyor; sonuç `POST /order` üzerinde **400** ve `invalid amounts` hatası. Bu, upstream’de [rs-clob-client#261](https://github.com/Polymarket/rs-clob-client/issues/261) ile bilinen bir durum.
-
-Bu repoda `Cargo.toml` içinde **`[patch.crates-io]`** ile SDK’nın yerel bir kopyası (`vendor/polymarket-client-sdk`) kullanılıyor; yalnızca market emri tutar kesimi (`order_builder.rs`) düzeltilmiş. Derleme bu yolu **diskte bulmak zorunda** olduğundan `vendor/` silinirse `cargo build` başarısız olur (patch kaldırılana kadar).
-
-**Ne zaman kaldırılabilir?** crates.io’da bu düzeltmeyi içeren **yeni bir SDK sürümü** yayınlandığında:
-
-1. `Cargo.toml` içindeki `[patch.crates-io]` bloğunu silin.
-2. `polymarket-client-sdk` sürümünü yeni sürüme yükseltin.
-3. `vendor/polymarket-client-sdk` (ve isteğe bağlı `vendor/README.md`) klasörünü silin; `cargo build` ve `cargo test` ile doğrulayın.
-
-Kısa teknik özet: [vendor/README.md](vendor/README.md).
+- **Alım emirleri:** Bot, anlık likidite gerektirmeyen **GTD limit alım** kullanır (`end_date_ms` ile süre sınırı); crates.io **polymarket-client-sdk** 0.4.4 doğrudan kullanılır.
 
 ## Ortam değişkenleri (özet)
 

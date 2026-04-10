@@ -1,17 +1,43 @@
+use std::str::FromStr;
+
 use anyhow::{Context, Result};
+use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use tracing::{info, warn};
 
 use polymarket_client_sdk::auth::builder::Builder;
 use polymarket_client_sdk::auth::state::Authenticated;
-use polymarket_client_sdk::auth::{Kind, Normal, Signer};
+use polymarket_client_sdk::auth::{Credentials, Kind, Normal, Signer};
 use polymarket_client_sdk::clob;
-use polymarket_client_sdk::clob::types::{Amount, OrderType, Side};
-use polymarket_client_sdk::types::U256;
+use polymarket_client_sdk::clob::types::request::CancelMarketOrderRequest;
+use polymarket_client_sdk::clob::types::response::PostOrderResponse;
+use polymarket_client_sdk::clob::types::{OrderStatusType, OrderType, Side};
+use polymarket_client_sdk::types::{Address, B256, U256};
 
 use crate::config::AppConfig;
 use crate::types::{Direction, Market, TradeSignal};
+
+/// Polymarket GTD minimum: expiration must be >= now + 60s (per docs).
+const MIN_GTD_EXPIRY_SECS: i64 = 60;
+
+/// Result of posting a GTD limit order (used to branch immediate fill vs resting).
+#[derive(Debug, Clone)]
+pub struct PlaceOrderOutcome {
+    pub order_id: String,
+    pub status: OrderStatusType,
+    /// Share size requested (matches CLOB `original_size` for new orders).
+    pub original_size_shares: Decimal,
+}
+
+/// Snapshot from `GET /data/order/{id}` for fill tracking / reconciliation.
+#[derive(Debug, Clone)]
+pub struct OrderPollResult {
+    pub status: OrderStatusType,
+    pub size_matched: Decimal,
+    pub original_size: Decimal,
+    pub price: Decimal,
+}
 
 /// Authenticated CLOB client: either L2-normal or Builder-promoted (both implement order flow via [`Kind`]).
 enum AuthenticatedClobClient {
@@ -25,17 +51,32 @@ fn truncate_size(size: Decimal) -> Decimal {
     size.round_dp_with_strategy(2, RoundingStrategy::ToZero)
 }
 
+fn ws_auth_from(clob: &AuthenticatedClobClient) -> (Credentials, Address) {
+    match clob {
+        AuthenticatedClobClient::Normal(c) => (c.credentials().clone(), c.address()),
+        AuthenticatedClobClient::Builder(c) => (c.credentials().clone(), c.address()),
+    }
+}
+
 /// Handles order submission to Polymarket CLOB.
 pub struct Executor {
     clob_client: Option<AuthenticatedClobClient>,
     signer: Option<alloy::signers::local::PrivateKeySigner>,
     dry_run: bool,
+    /// API credentials + wallet address for user WebSocket (`clob::ws`).
+    ws_auth: Option<(Credentials, Address)>,
 }
 
 impl Executor {
     #[must_use]
     pub fn is_dry_run(&self) -> bool {
         self.dry_run
+    }
+
+    /// Credentials and address for [`crate::user_ws`] (only when not dry-run and CLOB auth succeeded).
+    #[must_use]
+    pub fn ws_auth(&self) -> Option<(Credentials, Address)> {
+        self.ws_auth.clone()
     }
 
     pub async fn new(_http: reqwest::Client, cfg: &AppConfig) -> Self {
@@ -45,6 +86,7 @@ impl Executor {
                 clob_client: None,
                 signer: None,
                 dry_run: true,
+                ws_auth: None,
             };
         }
 
@@ -60,6 +102,7 @@ impl Executor {
                     clob_client: None,
                     signer: None,
                     dry_run: true,
+                    ws_auth: None,
                 };
             }
         };
@@ -77,6 +120,7 @@ impl Executor {
                     clob_client: None,
                     signer: None,
                     dry_run: true,
+                    ws_auth: None,
                 };
             }
         };
@@ -86,10 +130,6 @@ impl Executor {
             .authentication_builder(&signer)
             .signature_type(cfg.signature_type.to_sdk_type());
 
-        // Handle funder address:
-        // - For Proxy/GnosisSafe: SDK auto-derives via CREATE2 if not provided
-        // - For EOA: No funder needed
-        // - Manual override: Use FUNDER_ADDRESS env var if set
         if let Some(ref funder_addr) = cfg.funder_address {
             match funder_addr.parse::<alloy::primitives::Address>() {
                 Ok(funder) => {
@@ -102,11 +142,11 @@ impl Executor {
                         clob_client: None,
                         signer: None,
                         dry_run: true,
+                        ws_auth: None,
                     };
                 }
             }
         } else {
-            // SDK will auto-derive funder for Proxy/GnosisSafe via CREATE2
             info!(
                 signature_type = ?cfg.signature_type,
                 "no manual funder specified, SDK will auto-derive for Proxy/GnosisSafe"
@@ -121,11 +161,11 @@ impl Executor {
                     clob_client: None,
                     signer: None,
                     dry_run: true,
+                    ws_auth: None,
                 };
             }
         };
 
-        // Promote to Builder API if credentials provided (consumes `authenticated` on attempt).
         let clob_client = if let (Some(key), Some(secret), Some(passphrase)) = (
             &cfg.builder_api_key,
             &cfg.builder_api_secret,
@@ -157,6 +197,7 @@ impl Executor {
                                 clob_client: None,
                                 signer: Some(signer),
                                 dry_run: true,
+                                ws_auth: None,
                             };
                         }
                     }
@@ -170,28 +211,25 @@ impl Executor {
             AuthenticatedClobClient::Normal(authenticated)
         };
 
+        let ws_auth = Some(ws_auth_from(&clob_client));
+
         Self {
             clob_client: Some(clob_client),
             signer: Some(signer),
             dry_run: false,
+            ws_auth,
         }
     }
 
-    /// Place a market order (FAK - Fill and Kill).
-    /// `size_usdc` is the USDC amount to spend.
-    ///
-    /// Note: We calculate shares manually (USDC / price) to validate minimum size
-    /// before submitting. Alternatively, could use Amount::usdc() and let SDK
-    /// walk the orderbook, but manual calculation gives us better logging/control.
-    /// `worst_price_limit` is the maximum price for the outcome token (Polymarket CLOB worst-price / slippage cap).
+    /// Place a **GTD** limit buy: rests on the book until fill or market `end_date_ms`.
     pub async fn place_order(
         &self,
         market: &Market,
         trade: &TradeSignal,
         size_usdc: Decimal,
         worst_price_limit: Decimal,
-    ) -> Result<String> {
-        // Derive shares from USDC and token price
+        end_date_ms: i64,
+    ) -> Result<PlaceOrderOutcome> {
         let shares = if trade.token_price > Decimal::ZERO {
             size_usdc / trade.token_price
         } else {
@@ -200,9 +238,17 @@ impl Executor {
 
         let shares = truncate_size(shares);
 
-        // Polymarket minimum order size (5 shares)
         if shares < dec!(5) {
             anyhow::bail!("order size {} below Polymarket minimum (5 shares)", shares);
+        }
+
+        let now_secs = Utc::now().timestamp();
+        let market_end_secs = end_date_ms / 1000;
+        if market_end_secs < now_secs + MIN_GTD_EXPIRY_SECS {
+            anyhow::bail!(
+                "market end too soon for GTD (expiration must be >= now + {}s)",
+                MIN_GTD_EXPIRY_SECS
+            );
         }
 
         let side_str = match trade.direction {
@@ -226,115 +272,164 @@ impl Executor {
             size_usdc    = %size_usdc,
             shares       = %shares,
             token_id     = %token_id,
-            "placing market order (FAK)"
+            end_date_ms  = end_date_ms,
+            "placing limit order (GTD)"
         );
 
-        // Dry-run mode: just log and return fake order ID
         if self.dry_run {
             let order_id = format!("dry-run-{}", uuid::Uuid::new_v4());
             info!(order_id = %order_id, "DRY RUN — order not sent");
-            return Ok(order_id);
+            return Ok(PlaceOrderOutcome {
+                order_id,
+                status: OrderStatusType::Matched,
+                original_size_shares: shares,
+            });
         }
 
         let signer = self.signer.as_ref().context("Signer not initialized")?;
 
-        let order_id = match self
+        let response = match self
             .clob_client
             .as_ref()
             .context("CLOB client not initialized")?
         {
             AuthenticatedClobClient::Normal(client) => {
-                post_fak_market_order(client, signer, token_id, shares, worst_price_limit).await?
+                post_gtd_limit_order(
+                    client,
+                    signer,
+                    token_id,
+                    shares,
+                    worst_price_limit,
+                    end_date_ms,
+                )
+                .await?
             }
             AuthenticatedClobClient::Builder(client) => {
-                post_fak_market_order(client, signer, token_id, shares, worst_price_limit).await?
+                post_gtd_limit_order(
+                    client,
+                    signer,
+                    token_id,
+                    shares,
+                    worst_price_limit,
+                    end_date_ms,
+                )
+                .await?
             }
         };
 
-        Ok(order_id)
+        let order_id = response.order_id.clone();
+        let filled = matches!(response.status, OrderStatusType::Matched);
+
+        info!(
+            order_id = %order_id,
+            filled = filled,
+            taking_amount = %response.taking_amount,
+            "order placed"
+        );
+
+        if !response.success {
+            warn!(order_id = %order_id, "order rejected by CLOB");
+            anyhow::bail!("order rejected");
+        }
+
+        Ok(PlaceOrderOutcome {
+            order_id,
+            status: response.status,
+            original_size_shares: shares,
+        })
+    }
+
+    /// `GET /data/order/{order_id}` — REST fallback when user WS misses an update.
+    pub async fn poll_order(&self, order_id: &str) -> Result<OrderPollResult> {
+        if self.dry_run {
+            anyhow::bail!("poll_order not available in dry-run");
+        }
+        let client = self
+            .clob_client
+            .as_ref()
+            .context("CLOB client not initialized")?;
+        let r = match client {
+            AuthenticatedClobClient::Normal(c) => c.order(order_id).await,
+            AuthenticatedClobClient::Builder(c) => c.order(order_id).await,
+        }
+        .map_err(|e| anyhow::anyhow!("poll order failed: {}", e))?;
+
+        Ok(OrderPollResult {
+            status: r.status,
+            size_matched: r.size_matched,
+            original_size: r.original_size,
+            price: r.price,
+        })
+    }
+
+    /// Cancel a single open order by id.
+    pub async fn cancel_order(&self, order_id: &str) -> Result<()> {
+        if self.dry_run {
+            return Ok(());
+        }
+        let client = self
+            .clob_client
+            .as_ref()
+            .context("CLOB client not initialized")?;
+        match client {
+            AuthenticatedClobClient::Normal(c) => c.cancel_order(order_id).await,
+            AuthenticatedClobClient::Builder(c) => c.cancel_order(order_id).await,
+        }
+        .map_err(|e| anyhow::anyhow!("cancel_order failed: {}", e))?;
+        Ok(())
+    }
+
+    /// Cancel all orders for a market (`condition_id` hex string).
+    pub async fn cancel_market_orders(&self, condition_id: &str) -> Result<()> {
+        if self.dry_run {
+            return Ok(());
+        }
+        let market = B256::from_str(condition_id)
+            .map_err(|e| anyhow::anyhow!("invalid condition_id: {}", e))?;
+        let request = CancelMarketOrderRequest::builder().market(market).build();
+        let client = self
+            .clob_client
+            .as_ref()
+            .context("CLOB client not initialized")?;
+        match client {
+            AuthenticatedClobClient::Normal(c) => c.cancel_market_orders(&request).await,
+            AuthenticatedClobClient::Builder(c) => c.cancel_market_orders(&request).await,
+        }
+        .map_err(|e| anyhow::anyhow!("cancel_market_orders failed: {}", e))?;
+        Ok(())
     }
 }
 
-/// Submit a FAK market order using any authenticated CLOB client state ([`Normal`] or [`Builder`]).
-async fn post_fak_market_order<K: Kind>(
+async fn post_gtd_limit_order<K: Kind>(
     client: &clob::Client<Authenticated<K>>,
     signer: &alloy::signers::local::PrivateKeySigner,
     token_id: U256,
     shares: Decimal,
-    worst_price: Decimal,
-) -> Result<String> {
-    let amount = Amount::shares(shares).context("failed to build Amount::shares")?;
+    limit_price: Decimal,
+    end_date_ms: i64,
+) -> Result<PostOrderResponse> {
+    let exp =
+        DateTime::from_timestamp(end_date_ms / 1000, 0).unwrap_or(DateTime::<Utc>::UNIX_EPOCH);
 
     let order = client
-        .market_order()
+        .limit_order()
         .token_id(token_id)
-        .amount(amount)
-        .price(worst_price)
+        .size(shares)
+        .price(limit_price)
         .side(Side::Buy)
-        .order_type(OrderType::FAK)
+        .order_type(OrderType::GTD)
+        .expiration(exp)
         .build()
         .await
-        .context("failed to build market order")?;
+        .context("failed to build limit order")?;
 
     let signed = client
         .sign(signer, order)
         .await
         .context("failed to sign order")?;
 
-    let response = client
+    client
         .post_order(signed)
         .await
-        .map_err(|e| anyhow::anyhow!("order submission failed: {}", e))?;
-
-    let order_id = response.order_id.clone();
-    let filled = matches!(
-        response.status,
-        polymarket_client_sdk::clob::types::OrderStatusType::Matched
-    );
-
-    info!(
-        order_id = %order_id,
-        filled = filled,
-        taking_amount = %response.taking_amount,
-        "order placed"
-    );
-
-    if !response.success {
-        warn!(order_id = %order_id, "order rejected by CLOB");
-        anyhow::bail!("order rejected");
-    }
-
-    Ok(order_id)
-}
-
-#[cfg(test)]
-mod market_amount_precision_tests {
-    //! Mirrors CLOB rules for market BUY + shares: maker (USDC) max 2 dp (see vendor SDK patch).
-
-    use rust_decimal_macros::dec;
-
-    #[test]
-    fn market_buy_maker_usdc_must_not_exceed_two_decimal_places() {
-        let shares = dec!(26.61);
-        let price_after_tick = dec!(0.375750).trunc_with_scale(3);
-        let usdc = (shares * price_after_tick).trunc_with_scale(2);
-        assert!(
-            usdc.scale() <= 2,
-            "CLOB rejects maker amount with >2 decimals; scale was {}",
-            usdc.scale()
-        );
-    }
-
-    #[test]
-    fn old_sdk_formula_would_exceed_maker_decimal_limit() {
-        let shares = dec!(26.61);
-        let price_after_tick = dec!(0.375750).trunc_with_scale(3);
-        let decimals = 3_u32;
-        let lot = 2_u32;
-        let buggy = (shares * price_after_tick).trunc_with_scale(decimals + lot);
-        assert!(
-            buggy.scale() > 2,
-            "regression guard: unpatched SDK used tick+lot scale (here 5 dp)"
-        );
-    }
+        .map_err(|e| anyhow::anyhow!("order submission failed: {}", e))
 }

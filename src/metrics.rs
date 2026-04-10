@@ -82,6 +82,9 @@ pub struct TradeRecord {
     pub slippage_bps: Option<String>,
     #[serde(default)]
     pub effective_min_edge: Option<String>,
+    /// `filled` | `partial` | `expired` when order lifecycle is tracked (GTD); omitted on legacy rows.
+    #[serde(default)]
+    pub fill_status: Option<String>,
 }
 
 impl TradeRecord {
@@ -142,6 +145,7 @@ impl TradeRecord {
             question: None,
             slippage_bps: None,
             effective_min_edge: None,
+            fill_status: None,
         }
     }
 }
@@ -477,6 +481,29 @@ mod tests {
         let json = r#"{"timestamp":"2026-01-01T00:00:00Z","condition_id":"0x","asset":"btc","duration":"15m","direction":"NO","entry_price":"0.4","size_usdc":"10","size_shares":"25","llm_probability":"0.55","confidence":"0.7","edge":"0.1","reasoning":"t","order_id":"o1","outcome":null,"pnl":null,"resolved_at":null}"#;
         let t: TradeRecord = serde_json::from_str(json).expect("alias");
         assert_eq!(t.signal_probability, "0.55");
+        assert!(t.fill_status.is_none());
+    }
+
+    #[test]
+    fn trade_record_fill_status_serde_roundtrip() {
+        let mut r = TradeRecord::new(
+            "0xc1".to_string(),
+            "btc".to_string(),
+            "5m".to_string(),
+            Direction::Yes,
+            dec!(0.5),
+            dec!(10),
+            dec!(20),
+            dec!(0.6),
+            dec!(0.8),
+            dec!(0.1),
+            "r".to_string(),
+            "ord-fs".to_string(),
+        );
+        r.fill_status = Some("partial".to_string());
+        let json = serde_json::to_string(&r).expect("serialize");
+        let back: TradeRecord = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.fill_status.as_deref(), Some("partial"));
     }
 
     #[test]
