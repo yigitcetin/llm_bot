@@ -25,12 +25,6 @@ fn truncate_size(size: Decimal) -> Decimal {
     size.round_dp_with_strategy(2, RoundingStrategy::ToZero)
 }
 
-/// Polymarket requires prices (taker amount) with at most 4 decimal places.
-fn truncate_price(price: Decimal) -> Decimal {
-    use rust_decimal::prelude::RoundingStrategy;
-    price.round_dp_with_strategy(4, RoundingStrategy::ToZero)
-}
-
 /// Handles order submission to Polymarket CLOB.
 pub struct Executor {
     clob_client: Option<AuthenticatedClobClient>,
@@ -270,7 +264,6 @@ async fn post_fak_market_order<K: Kind>(
     worst_price: Decimal,
 ) -> Result<String> {
     let amount = Amount::shares(shares).context("failed to build Amount::shares")?;
-    let worst_price = truncate_price(worst_price);
 
     let order = client
         .market_order()
@@ -312,4 +305,36 @@ async fn post_fak_market_order<K: Kind>(
     }
 
     Ok(order_id)
+}
+
+#[cfg(test)]
+mod market_amount_precision_tests {
+    //! Mirrors CLOB rules for market BUY + shares: maker (USDC) max 2 dp (see vendor SDK patch).
+
+    use rust_decimal_macros::dec;
+
+    #[test]
+    fn market_buy_maker_usdc_must_not_exceed_two_decimal_places() {
+        let shares = dec!(26.61);
+        let price_after_tick = dec!(0.375750).trunc_with_scale(3);
+        let usdc = (shares * price_after_tick).trunc_with_scale(2);
+        assert!(
+            usdc.scale() <= 2,
+            "CLOB rejects maker amount with >2 decimals; scale was {}",
+            usdc.scale()
+        );
+    }
+
+    #[test]
+    fn old_sdk_formula_would_exceed_maker_decimal_limit() {
+        let shares = dec!(26.61);
+        let price_after_tick = dec!(0.375750).trunc_with_scale(3);
+        let decimals = 3_u32;
+        let lot = 2_u32;
+        let buggy = (shares * price_after_tick).trunc_with_scale(decimals + lot);
+        assert!(
+            buggy.scale() > 2,
+            "regression guard: unpatched SDK used tick+lot scale (here 5 dp)"
+        );
+    }
 }

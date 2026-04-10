@@ -67,3 +67,9 @@ once_cell = "1.21"
 
 [dev-dependencies]
 tokio-test = "0.4"
+
+# Vendored patch: market-order amount truncation must match CLOB API (maker ≤2 dp, taker ≤4 dp on
+# FAK/FOK). Upstream: https://github.com/Polymarket/rs-clob-client/issues/261 — remove when
+# polymarket-client-sdk > 0.4.4 includes the fix.
+[patch.crates-io]
+polymarket-client-sdk = { path = "vendor/polymarket-client-sdk" }
