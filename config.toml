@@ -96,4 +96,3 @@ min_edge = "0.12"
 min_confidence = "0.75"
 volume_min_ratio = 0.7
 vol_min_std_pct = "0.025"
-blocked_direction = "YES"
