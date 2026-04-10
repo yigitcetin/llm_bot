@@ -19,10 +19,16 @@ enum AuthenticatedClobClient {
     Builder(clob::Client<Authenticated<Builder>>),
 }
 
-/// Polymarket requires order sizes with at most 2 decimal places.
+/// Polymarket requires order sizes (maker amount) with at most 2 decimal places.
 fn truncate_size(size: Decimal) -> Decimal {
     use rust_decimal::prelude::RoundingStrategy;
     size.round_dp_with_strategy(2, RoundingStrategy::ToZero)
+}
+
+/// Polymarket requires prices (taker amount) with at most 4 decimal places.
+fn truncate_price(price: Decimal) -> Decimal {
+    use rust_decimal::prelude::RoundingStrategy;
+    price.round_dp_with_strategy(4, RoundingStrategy::ToZero)
 }
 
 /// Handles order submission to Polymarket CLOB.
@@ -264,6 +270,7 @@ async fn post_fak_market_order<K: Kind>(
     worst_price: Decimal,
 ) -> Result<String> {
     let amount = Amount::shares(shares).context("failed to build Amount::shares")?;
+    let worst_price = truncate_price(worst_price);
 
     let order = client
         .market_order()
