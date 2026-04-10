@@ -3,6 +3,21 @@ use rust_decimal_macros::dec;
 
 use crate::types::{Direction, TradeSignal};
 
+/// Worst-case outcome token price (slippage applied, capped at 0.99) for buying `direction`.
+/// Matches the pricing leg of [`calculate`]; used when [`crate::market_matcher`] overrides direction
+/// so `token_price` stays aligned with YES vs NO token.
+pub fn token_price_for_direction(
+    market_yes_price: Decimal,
+    direction: Direction,
+    slippage_bps: Decimal,
+) -> Decimal {
+    let base_price = match direction {
+        Direction::Yes => market_yes_price,
+        Direction::No => dec!(1) - market_yes_price,
+    };
+    (base_price * (dec!(1) + slippage_bps)).min(dec!(0.99))
+}
+
 /// Calculate edge and direction with slippage protection.
 /// `slippage_bps` is a fraction added to the reference price (e.g. `0.002` for 20 bps).
 /// Returns `None` if edge is below `min_edge`.
@@ -21,19 +36,13 @@ pub fn calculate(
 
     // Positive edge → YES is underpriced → BUY YES
     // Negative edge → NO is underpriced → BUY NO
-    let (direction, base_price) = if edge > Decimal::ZERO {
-        (Direction::Yes, market_yes_price)
+    let direction = if edge > Decimal::ZERO {
+        Direction::Yes
     } else {
-        // For NO: market no price = 1 - yes price
-        let no_price = dec!(1) - market_yes_price;
-        (Direction::No, no_price)
+        Direction::No
     };
 
-    // Apply slippage: increase price we're willing to pay
-    let token_price_with_slippage = base_price * (dec!(1) + slippage_bps);
-
-    // Cap at 0.99 to avoid paying more than token is worth
-    let token_price = token_price_with_slippage.min(dec!(0.99));
+    let token_price = token_price_for_direction(market_yes_price, direction, slippage_bps);
 
     Some(TradeSignal {
         direction,
@@ -224,6 +233,29 @@ mod tests {
         let result = calculate(dec!(0.35), dec!(0.50), dec!(0.06), dec!(0.002)).unwrap();
         assert_eq!(result.direction, Direction::No);
         assert_eq!(result.edge, dec!(0.15));
+    }
+
+    #[test]
+    fn token_price_for_direction_matches_calculate() {
+        let slip = dec!(0.002);
+        let yes = dec!(0.805);
+        let t = calculate(dec!(0.51), yes, dec!(0.29), slip).unwrap();
+        assert_eq!(
+            t.token_price,
+            token_price_for_direction(yes, t.direction, slip)
+        );
+    }
+
+    #[test]
+    fn token_price_for_yes_not_below_yes_ask_reference() {
+        // After market_matcher override to Yes, repriced token must track YES, not NO.
+        let yes = dec!(0.805);
+        let slip = dec!(0.002);
+        let yes_px = token_price_for_direction(yes, Direction::Yes, slip);
+        let no_px = token_price_for_direction(yes, Direction::No, slip);
+        assert!(yes_px > dec!(0.50));
+        assert!(no_px < dec!(0.50));
+        assert!(yes_px > no_px);
     }
 
     #[test]

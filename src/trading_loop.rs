@@ -480,7 +480,11 @@ pub async fn run_cycle(
             continue;
         };
 
-        trade.direction = direction;
+        if trade.direction != direction {
+            trade.direction = direction;
+            trade.token_price =
+                edge::token_price_for_direction(market.yes_price, direction, st.slippage_bps);
+        }
 
         let balance = risk.available_balance();
         let sizing = edge::kelly_size_with_caps_detail(
