@@ -70,7 +70,7 @@ signature_type = "GNOSIS_SAFE"
 data_dir = "data"
 
 [asset.btc]
-min_edge = "0.12"
+min_edge = "0.01"
 min_confidence = "0.75"
 candle_lookback = 200
 volume_min_ratio = 0.8
@@ -80,7 +80,7 @@ htf_enabled = true
 max_secs_to_close = 600
 
 [asset.eth]
-min_edge = "0.10"
+min_edge = "0.01"
 min_confidence = "0.72"
 candle_lookback = 150
 volume_min_ratio = 0.7
@@ -93,11 +93,11 @@ cluster_mom5_abs = 0.002
 cluster_mom15_abs = 0.004
 
 [asset.sol]
-min_edge = "0.12"
+min_edge = "0.01"
 volume_min_ratio = 0.7
 
 [asset.xrp]
-min_edge = "0.12"
+min_edge = "0.01"
 min_confidence = "0.75"
 volume_min_ratio = 0.7
 vol_min_std_pct = "0.025"
