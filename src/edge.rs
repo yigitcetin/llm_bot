@@ -3,6 +3,16 @@ use rust_decimal_macros::dec;
 
 use crate::types::{Direction, TradeSignal};
 
+/// Ceil to $0.01 tick for CLOB limit compatibility (worst-case buy price).
+fn ceil_to_cent_tick(price: Decimal) -> Decimal {
+    if price <= Decimal::ZERO {
+        return Decimal::ZERO;
+    }
+    let scaled = price * dec!(100);
+    let n = scaled.ceil();
+    (n / dec!(100)).min(dec!(0.99))
+}
+
 /// Worst-case outcome token price (slippage applied, capped at 0.99) for buying `direction`.
 /// Matches the pricing leg of [`calculate`]; used when [`crate::market_matcher`] overrides direction
 /// so `token_price` stays aligned with YES vs NO token.
@@ -15,7 +25,8 @@ pub fn token_price_for_direction(
         Direction::Yes => market_yes_price,
         Direction::No => dec!(1) - market_yes_price,
     };
-    (base_price * (dec!(1) + slippage_bps)).min(dec!(0.99))
+    let raw = (base_price * (dec!(1) + slippage_bps)).min(dec!(0.99));
+    ceil_to_cent_tick(raw)
 }
 
 /// Calculate edge and direction with slippage protection.

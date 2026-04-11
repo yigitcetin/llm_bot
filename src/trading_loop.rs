@@ -26,7 +26,7 @@ use crate::signal_extensions::{
 };
 use crate::signals::{compute_volume_ratio, higher_timeframe_aligns};
 use crate::spot_price::SpotPriceClient;
-use crate::types::{Market, OpenPosition};
+use crate::types::{Direction, Market, OpenPosition};
 use crate::volatility::{compute_return_std_pct, passes_volatility_filter};
 use polymarket_client_sdk::clob::types::OrderStatusType;
 
@@ -511,6 +511,43 @@ pub async fn run_cycle(
                     continue;
                 }
             }
+        }
+
+        if st.rsi_yes_max > 0.0 && trade.direction == Direction::Yes && signal.rsi > st.rsi_yes_max {
+            log_skip_decision(
+                logger,
+                &market,
+                "rsi_yes_over_max",
+                Some(format!(
+                    "rsi={}, rsi_yes_max={}, signal_prob={}",
+                    signal.rsi, st.rsi_yes_max, signal.probability,
+                )),
+            );
+            info!(
+                condition_id = %market.condition_id,
+                rsi = signal.rsi,
+                threshold = st.rsi_yes_max,
+                "skip: RSI too high for YES (overbought chase)"
+            );
+            continue;
+        }
+        if st.rsi_no_min > 0.0 && trade.direction == Direction::No && signal.rsi < st.rsi_no_min {
+            log_skip_decision(
+                logger,
+                &market,
+                "rsi_no_below_min",
+                Some(format!(
+                    "rsi={}, rsi_no_min={}, signal_prob={}",
+                    signal.rsi, st.rsi_no_min, signal.probability,
+                )),
+            );
+            info!(
+                condition_id = %market.condition_id,
+                rsi = signal.rsi,
+                threshold = st.rsi_no_min,
+                "skip: RSI too low for NO (oversold fade)"
+            );
+            continue;
         }
 
         let balance = risk.available_balance();

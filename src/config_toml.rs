@@ -76,6 +76,10 @@ pub struct ClusterSection {
     pub min_momentum_5m_abs: Option<f64>,
     /// When `taker_buy_ratio` is in `[0.45, 0.55]`, multiply effective min edge by this.
     pub neutral_taker_edge_multiplier: Option<f64>,
+    /// Skip BUY YES when RSI exceeds this (overbought chase). `0` = off.
+    pub rsi_yes_max: Option<f64>,
+    /// Skip BUY NO when RSI is below this (oversold fade). `0` = off.
+    pub rsi_no_min: Option<f64>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -170,6 +174,8 @@ pub struct AssetOverride {
     pub blocked_direction: Option<String>,
     pub min_momentum_5m_abs: Option<f64>,
     pub neutral_taker_edge_multiplier: Option<f64>,
+    pub rsi_yes_max: Option<f64>,
+    pub rsi_no_min: Option<f64>,
 }
 
 /// Read and parse `CONFIG_PATH` (default `config.toml`). Missing file → `None`.

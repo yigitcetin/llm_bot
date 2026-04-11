@@ -106,6 +106,10 @@ pub struct AppConfig {
     pub min_momentum_5m_abs: f64,
     /// When `taker_buy_ratio` in `[0.45, 0.55]`, multiply effective min edge by this.
     pub neutral_taker_edge_multiplier: f64,
+    /// Skip BUY YES when RSI exceeds this (`0` = off). Default 70.
+    pub rsi_yes_max: f64,
+    /// Skip BUY NO when RSI is below this (`0` = off). Default 30.
+    pub rsi_no_min: f64,
 
     /// Parsed `config.toml` for per-asset TOML fallbacks (environment still wins).
     pub(crate) toml: Option<Arc<TomlRoot>>,
@@ -169,6 +173,10 @@ pub struct AssetStrategy {
     pub min_momentum_5m_abs: f64,
     /// When `taker_buy_ratio` in `[0.45, 0.55]`, multiply effective min edge by this.
     pub neutral_taker_edge_multiplier: f64,
+    /// Skip BUY YES when RSI exceeds this (`0` = off).
+    pub rsi_yes_max: f64,
+    /// Skip BUY NO when RSI is below this (`0` = off).
+    pub rsi_no_min: f64,
     /// Slippage fraction for edge sizing and order worst-price limit.
     pub slippage_bps: Decimal,
     pub max_secs_to_close: Option<i64>,
@@ -296,6 +304,25 @@ impl AssetStrategy {
             anyhow::bail!(
                 "NEUTRAL_TAKER_EDGE_MULTIPLIER_* must be in [1.0, 5.0], got: {}",
                 self.neutral_taker_edge_multiplier
+            );
+        }
+        if self.rsi_yes_max < 0.0 || self.rsi_yes_max > 100.0 {
+            anyhow::bail!(
+                "RSI_YES_MAX_* must be in [0, 100] (0 = off), got: {}",
+                self.rsi_yes_max
+            );
+        }
+        if self.rsi_no_min < 0.0 || self.rsi_no_min > 100.0 {
+            anyhow::bail!(
+                "RSI_NO_MIN_* must be in [0, 100] (0 = off), got: {}",
+                self.rsi_no_min
+            );
+        }
+        if self.rsi_yes_max > 0.0 && self.rsi_no_min > 0.0 && self.rsi_no_min >= self.rsi_yes_max {
+            anyhow::bail!(
+                "RSI_NO_MIN_* ({}) must be < RSI_YES_MAX_* ({}) when both are enabled",
+                self.rsi_no_min,
+                self.rsi_yes_max
             );
         }
         if self.slippage_bps <= Decimal::ZERO || self.slippage_bps > dec!(0.05) {
@@ -950,6 +977,18 @@ impl AppConfig {
                 1.5,
             ),
 
+            rsi_yes_max: env_toml_f64(
+                "RSI_YES_MAX",
+                tc.and_then(|c| c.rsi_yes_max),
+                70.0,
+            ),
+
+            rsi_no_min: env_toml_f64(
+                "RSI_NO_MIN",
+                tc.and_then(|c| c.rsi_no_min),
+                30.0,
+            ),
+
             toml: toml_arc,
         };
 
@@ -1200,6 +1239,20 @@ impl AppConfig {
                 self.neutral_taker_edge_multiplier,
                 |x| x.neutral_taker_edge_multiplier,
             ),
+            rsi_yes_max: env_toml_asset_f64(
+                "RSI_YES_MAX",
+                &su,
+                a,
+                self.rsi_yes_max,
+                |x| x.rsi_yes_max,
+            ),
+            rsi_no_min: env_toml_asset_f64(
+                "RSI_NO_MIN",
+                &su,
+                a,
+                self.rsi_no_min,
+                |x| x.rsi_no_min,
+            ),
             slippage_bps: env_toml_asset_decimal("SLIPPAGE_BPS", &su, a, self.slippage_bps, |x| {
                 x.slippage_bps.as_ref()
             }),
@@ -1310,6 +1363,25 @@ impl AppConfig {
                 self.neutral_taker_edge_multiplier
             );
         }
+        if self.rsi_yes_max < 0.0 || self.rsi_yes_max > 100.0 {
+            anyhow::bail!(
+                "RSI_YES_MAX must be in [0, 100] (0 = off), got: {}",
+                self.rsi_yes_max
+            );
+        }
+        if self.rsi_no_min < 0.0 || self.rsi_no_min > 100.0 {
+            anyhow::bail!(
+                "RSI_NO_MIN must be in [0, 100] (0 = off), got: {}",
+                self.rsi_no_min
+            );
+        }
+        if self.rsi_yes_max > 0.0 && self.rsi_no_min > 0.0 && self.rsi_no_min >= self.rsi_yes_max {
+            anyhow::bail!(
+                "RSI_NO_MIN ({}) must be < RSI_YES_MAX ({}) when both are enabled",
+                self.rsi_no_min,
+                self.rsi_yes_max
+            );
+        }
         if self.slippage_bps <= Decimal::ZERO || self.slippage_bps > dec!(0.05) {
             anyhow::bail!(
                 "SLIPPAGE_BPS must be in (0, 0.05], got: {}",
@@ -1407,6 +1479,8 @@ impl Default for AppConfig {
             cluster_tie_min_edge_multiplier: 1.0,
             min_momentum_5m_abs: 0.0,
             neutral_taker_edge_multiplier: 1.0,
+            rsi_yes_max: 70.0,
+            rsi_no_min: 30.0,
 
             toml: None,
         }
