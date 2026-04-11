@@ -596,24 +596,35 @@ fn parse_direction_str(s: &str) -> Option<Direction> {
     }
 }
 
-/// Per-asset only: `BLOCKED_DIRECTION_BTC=YES` or `[asset.btc] blocked_direction`.
-fn env_toml_asset_opt_direction(
-    key: &str,
+/// `BLOCKED_DIRECTION_BTC` > `[asset.btc] blocked_direction` > `BLOCKED_DIRECTION` > `[strategy] blocked_direction`.
+fn blocked_direction_for_asset(
     su: &str,
     asset: Option<&AssetOverride>,
+    strategy_blocked: Option<&str>,
 ) -> Option<Direction> {
-    let k = format!("{key}_{su}");
+    let k = format!("BLOCKED_DIRECTION_{su}");
     if let Ok(v) = std::env::var(&k) {
         if !v.trim().is_empty() {
-            return parse_direction_str(&v);
+            if let Some(d) = parse_direction_str(&v) {
+                return Some(d);
+            }
         }
     }
     if let Some(sec) = asset {
         if let Some(ref s) = sec.blocked_direction {
-            return parse_direction_str(s);
+            if let Some(d) = parse_direction_str(s) {
+                return Some(d);
+            }
         }
     }
-    None
+    if let Ok(v) = std::env::var("BLOCKED_DIRECTION") {
+        if !v.trim().is_empty() {
+            if let Some(d) = parse_direction_str(&v) {
+                return Some(d);
+            }
+        }
+    }
+    strategy_blocked.and_then(parse_direction_str)
 }
 
 fn vol_std_with_toml(
@@ -1199,7 +1210,14 @@ impl AppConfig {
                 self.max_secs_to_close,
                 |x| x.max_secs_to_close,
             ),
-            blocked_direction: env_toml_asset_opt_direction("BLOCKED_DIRECTION", &su, a),
+            blocked_direction: blocked_direction_for_asset(
+                &su,
+                a,
+                self.toml
+                    .as_deref()
+                    .and_then(|t| t.strategy.as_ref())
+                    .and_then(|s| s.blocked_direction.as_deref()),
+            ),
         }
     }
 

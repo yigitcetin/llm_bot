@@ -35,6 +35,8 @@ pub struct StrategySection {
     pub min_order_usdc: Option<String>,
     /// Fraction added to token price for slippage (e.g. `0.002` = 20 bps). Mirrors env `SLIPPAGE_BPS`.
     pub slippage_bps: Option<String>,
+    /// Default block for all assets unless overridden per `[asset.*]` (`YES` or `NO`).
+    pub blocked_direction: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -218,6 +220,7 @@ vol_min_std_pct = "0.03"
         let s = r#"
 [strategy]
 slippage_bps = "0.002"
+blocked_direction = "NO"
 
 [cluster]
 cluster_tie_min_edge_multiplier = 1.3
@@ -231,6 +234,10 @@ blocked_direction = "YES"
         assert_eq!(
             r.strategy.as_ref().unwrap().slippage_bps.as_deref(),
             Some("0.002")
+        );
+        assert_eq!(
+            r.strategy.as_ref().unwrap().blocked_direction.as_deref(),
+            Some("NO")
         );
         let c = r.cluster.as_ref().unwrap();
         assert_eq!(c.cluster_tie_min_edge_multiplier, Some(1.3));

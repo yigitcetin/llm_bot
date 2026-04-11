@@ -358,7 +358,8 @@ pub fn generate_signal(candles: &[Candle], config: &SignalConfig) -> SignalResul
         "calculated technical indicators"
     );
 
-    let scaled = momentum_5m.abs().min(0.03) / 0.03 * 0.3;
+    // Scale momentum into YES-implied probability band: at |mom|>=0.01 use full ±0.30 swing (was 0.03 — too flat for 1m).
+    let scaled = momentum_5m.abs().min(0.01) / 0.01 * 0.3;
     // YES-implied probability: UP → higher YES odds; DOWN → lower YES odds (edge vs `yes_price` stays coherent).
     let base_probability = match direction {
         SignalDirection::Up => 0.5 + scaled,
