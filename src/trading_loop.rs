@@ -24,10 +24,11 @@ use crate::signal_extensions::{
     above_max_secs_to_close, apply_market_timing_to_signal, below_min_secs_to_close,
     parse_duration_to_secs,
 };
-use crate::signals::{compute_volume_ratio, higher_timeframe_aligns};
+use crate::signals::{compute_volume_ratio, higher_timeframe_aligns, TechnicalSignal};
 use crate::spot_price::SpotPriceClient;
-use crate::types::{Direction, Market, OpenPosition};
+use crate::types::{Direction, Market, OpenPosition, TradeSignal};
 use crate::volatility::{compute_return_std_pct, passes_volatility_filter};
+use uuid::Uuid;
 use polymarket_client_sdk::clob::types::OrderStatusType;
 
 fn log_skip_decision(
@@ -44,6 +45,100 @@ fn log_skip_decision(
         reason,
         details,
     ));
+}
+
+/// Fixed USDC notional for shadow (counterfactual) rows — comparable across filters.
+const SHADOW_TRADE_USDC: Decimal = dec!(5);
+
+fn compute_edge_min_for_trade_cluster(
+    signal: &TechnicalSignal,
+    st: &AssetStrategy,
+    eff_min_edge: Decimal,
+) -> Decimal {
+    let mut edge_min_for_trade = eff_min_edge;
+    if signal.cluster_direction == "TIE" {
+        let mult = Decimal::from_f64(st.cluster_tie_min_edge_multiplier).unwrap_or(dec!(1));
+        edge_min_for_trade = (eff_min_edge * mult).min(dec!(0.50));
+    }
+    if let Some(tbr) = signal.taker_buy_ratio {
+        if (0.45..=0.55).contains(&tbr) {
+            let mult = Decimal::from_f64(st.neutral_taker_edge_multiplier).unwrap_or(dec!(1));
+            edge_min_for_trade = (edge_min_for_trade * mult).min(dec!(0.50));
+        }
+    }
+    edge_min_for_trade
+}
+
+/// Log a hypothetical trade to `shadow_trades.jsonl` for counterfactual PnL (fixed $5 notional).
+#[allow(clippy::too_many_arguments)]
+fn log_shadow_counterfactual(
+    cfg: &AppConfig,
+    logger: &MetricsLogger,
+    market: &Market,
+    signal: &TechnicalSignal,
+    st: &AssetStrategy,
+    hyp: &TradeSignal,
+    skip_reason: &'static str,
+    htf_aligned: Option<bool>,
+    volatility_std_pct: Option<f64>,
+) {
+    let entry_price = hyp.token_price;
+    if entry_price <= Decimal::ZERO {
+        return;
+    }
+
+    let trades_path = format!("{}/trades.jsonl", cfg.data_dir);
+    let (eff_min_edge, eff_min_confidence) = adaptive::effective_thresholds(
+        &trades_path,
+        &market.asset,
+        st.min_edge,
+        st.min_confidence,
+        st.adaptive_trade_window,
+        st.adaptive_thresholds,
+    );
+    let edge_min_for_trade = compute_edge_min_for_trade_cluster(signal, st, eff_min_edge);
+
+    let size_usdc = SHADOW_TRADE_USDC;
+    let size_shares = (size_usdc / entry_price).round_dp(6);
+
+    let mut record = TradeRecord::new(
+        market.condition_id.clone(),
+        market.asset.clone(),
+        market.duration.clone(),
+        hyp.direction,
+        entry_price,
+        size_usdc,
+        size_shares,
+        signal.probability,
+        signal.confidence,
+        hyp.edge,
+        signal.reasoning.clone(),
+        format!("shadow-{}", Uuid::new_v4()),
+    );
+    record.skip_reason = Some(skip_reason.to_string());
+    record.rsi = Some(signal.rsi);
+    record.macd_histogram = Some(signal.macd_histogram);
+    record.volume_ratio = Some(signal.volume_ratio);
+    record.cluster_direction = Some(signal.cluster_direction.clone());
+    record.market_yes_price = Some(market.yes_price.to_string());
+    record.liquidity = Some(market.liquidity.to_string());
+    record.secs_to_close = Some(market.secs_to_close());
+    record.volatility_std_pct = volatility_std_pct;
+    record.kelly_fraction = Some("shadow_fixed_5_usdc".to_string());
+    record.htf_aligned = htf_aligned;
+    record.adaptive_min_edge = st.adaptive_thresholds.then(|| eff_min_edge.to_string());
+    record.adaptive_min_confidence = st.adaptive_thresholds.then(|| eff_min_confidence.to_string());
+    record.sizing_cap_hit = Some("shadow_fixed_notional".to_string());
+    record.momentum_5m = Some(signal.momentum_5m);
+    record.momentum_15m = Some(signal.momentum_15m);
+    record.taker_buy_ratio = signal.taker_buy_ratio;
+    record.macd_line = Some(signal.macd_line);
+    record.macd_signal_line = Some(signal.macd_signal_line);
+    record.question = Some(market.question.clone());
+    record.slippage_bps = Some(st.slippage_bps.to_string());
+    record.effective_min_edge = Some(edge_min_for_trade.to_string());
+
+    let _ = logger.log_shadow_trade(&record);
 }
 
 /// Cheap filters before any Binance HTTP (liquidity, price band, time-to-close, open position).
@@ -312,6 +407,18 @@ pub async fn run_cycle(
                     signal.momentum_5m, st.min_momentum_5m_abs
                 )),
             );
+            let hyp = edge::calculate_unchecked(signal.probability, market.yes_price, st.slippage_bps);
+            log_shadow_counterfactual(
+                cfg,
+                logger,
+                &market,
+                &signal,
+                &st,
+                &hyp,
+                "momentum_5m_too_weak",
+                None,
+                None,
+            );
             info!(
                 condition_id = %market.condition_id,
                 asset = %market.asset,
@@ -335,6 +442,20 @@ pub async fn run_cycle(
                 })
                 .unwrap_or_else(|| "vol_std_pct=unknown".to_string());
             log_skip_decision(logger, &market, "volatility_filter", Some(vol_detail));
+            let vol_std_f = compute_return_std_pct(&candles, st.volatility_filter.sample_bars)
+                .and_then(|d| d.to_f64());
+            let hyp = edge::calculate_unchecked(signal.probability, market.yes_price, st.slippage_bps);
+            log_shadow_counterfactual(
+                cfg,
+                logger,
+                &market,
+                &signal,
+                &st,
+                &hyp,
+                "volatility_filter",
+                None,
+                vol_std_f,
+            );
             info!(
                 condition_id = %market.condition_id,
                 question = %market.question,
@@ -357,6 +478,20 @@ pub async fn run_cycle(
                                 "htf_interval={}, ema_period={}, lookback={}",
                                 st.htf_interval, st.htf_ema_period, st.htf_lookback
                             )),
+                        );
+                        let vol_std_f = volatility_std_pct.and_then(|d| d.to_f64());
+                        let hyp =
+                            edge::calculate_unchecked(signal.probability, market.yes_price, st.slippage_bps);
+                        log_shadow_counterfactual(
+                            cfg,
+                            logger,
+                            &market,
+                            &signal,
+                            &st,
+                            &hyp,
+                            "htf_trend_mismatch",
+                            Some(false),
+                            vol_std_f,
                         );
                         info!(
                             condition_id = %market.condition_id,
@@ -401,6 +536,19 @@ pub async fn run_cycle(
                     st.adaptive_thresholds
                 )),
             );
+            let vol_std_f = volatility_std_pct.and_then(|d| d.to_f64());
+            let hyp = edge::calculate_unchecked(signal.probability, market.yes_price, st.slippage_bps);
+            log_shadow_counterfactual(
+                cfg,
+                logger,
+                &market,
+                &signal,
+                &st,
+                &hyp,
+                "confidence_too_low",
+                htf_aligned,
+                vol_std_f,
+            );
             info!(
                 "skip: signal confidence too low (confidence={}, threshold={})",
                 signal.confidence, eff_min_confidence
@@ -428,6 +576,24 @@ pub async fn run_cycle(
                     &market,
                     "direction_blocked",
                     Some(format!("direction={blocked:?}, asset={}", market.asset)),
+                );
+                let vol_std_f = volatility_std_pct.and_then(|d| d.to_f64());
+                let hyp = edge::recalculate_for_direction_unchecked(
+                    signal.probability,
+                    market.yes_price,
+                    direction,
+                    st.slippage_bps,
+                );
+                log_shadow_counterfactual(
+                    cfg,
+                    logger,
+                    &market,
+                    &signal,
+                    &st,
+                    &hyp,
+                    "direction_blocked",
+                    htf_aligned,
+                    vol_std_f,
                 );
                 info!(
                     condition_id = %market.condition_id,
@@ -472,6 +638,27 @@ pub async fn run_cycle(
                     signal.cluster_direction == "TIE",
                 )),
             );
+            let mut hyp = edge::calculate_unchecked(signal.probability, market.yes_price, st.slippage_bps);
+            if hyp.direction != direction {
+                hyp = edge::recalculate_for_direction_unchecked(
+                    signal.probability,
+                    market.yes_price,
+                    direction,
+                    st.slippage_bps,
+                );
+            }
+            let vol_std_f = volatility_std_pct.and_then(|d| d.to_f64());
+            log_shadow_counterfactual(
+                cfg,
+                logger,
+                &market,
+                &signal,
+                &st,
+                &hyp,
+                "edge_too_small",
+                htf_aligned,
+                vol_std_f,
+            );
             info!(
                 condition_id = %market.condition_id,
                 question = %market.question,
@@ -502,6 +689,24 @@ pub async fn run_cycle(
                             signal.probability, market.yes_price, direction,
                         )),
                     );
+                    let hyp = edge::recalculate_for_direction_unchecked(
+                        signal.probability,
+                        market.yes_price,
+                        direction,
+                        st.slippage_bps,
+                    );
+                    let vol_std_f = volatility_std_pct.and_then(|d| d.to_f64());
+                    log_shadow_counterfactual(
+                        cfg,
+                        logger,
+                        &market,
+                        &signal,
+                        &st,
+                        &hyp,
+                        "no_edge_after_direction_override",
+                        htf_aligned,
+                        vol_std_f,
+                    );
                     info!(
                         condition_id = %market.condition_id,
                         question = %market.question,
@@ -523,6 +728,18 @@ pub async fn run_cycle(
                     signal.rsi, st.rsi_yes_max, signal.probability,
                 )),
             );
+            let vol_std_f = volatility_std_pct.and_then(|d| d.to_f64());
+            log_shadow_counterfactual(
+                cfg,
+                logger,
+                &market,
+                &signal,
+                &st,
+                &trade,
+                "rsi_yes_over_max",
+                htf_aligned,
+                vol_std_f,
+            );
             info!(
                 condition_id = %market.condition_id,
                 rsi = signal.rsi,
@@ -540,6 +757,18 @@ pub async fn run_cycle(
                     "rsi={}, rsi_no_min={}, signal_prob={}",
                     signal.rsi, st.rsi_no_min, signal.probability,
                 )),
+            );
+            let vol_std_f = volatility_std_pct.and_then(|d| d.to_f64());
+            log_shadow_counterfactual(
+                cfg,
+                logger,
+                &market,
+                &signal,
+                &st,
+                &trade,
+                "rsi_no_below_min",
+                htf_aligned,
+                vol_std_f,
             );
             info!(
                 condition_id = %market.condition_id,
@@ -574,6 +803,18 @@ pub async fn run_cycle(
                     size_usdc, st.min_order_usdc
                 )),
             );
+            let vol_std_f = volatility_std_pct.and_then(|d| d.to_f64());
+            log_shadow_counterfactual(
+                cfg,
+                logger,
+                &market,
+                &signal,
+                &st,
+                &trade,
+                "order_size_below_minimum",
+                htf_aligned,
+                vol_std_f,
+            );
             info!(
                 condition_id = %market.condition_id,
                 question = %market.question,
@@ -599,6 +840,18 @@ pub async fn run_cycle(
                     st.max_position_pct,
                     matches!(reason, TradeBlockReason::DailyLossLimit),
                 )),
+            );
+            let vol_std_f = volatility_std_pct.and_then(|d| d.to_f64());
+            log_shadow_counterfactual(
+                cfg,
+                logger,
+                &market,
+                &signal,
+                &st,
+                &trade,
+                "risk_manager_blocked_trade",
+                htf_aligned,
+                vol_std_f,
             );
             tracing::warn!(
                 condition_id = %market.condition_id,

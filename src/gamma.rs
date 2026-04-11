@@ -292,7 +292,7 @@ fn parse_market(
     // 1. Question string close time (most reliable for 15m/1h up-or-down markets)
     // 2. Slug epoch + duration (for standard updown-{duration}-{epoch} slugs)
     // 3. Gamma endDateIso / endDate fields (can be date-only → 23:59 UTC, unreliable)
-    let end_date_ms = parse_close_time_from_question(&question)
+    let end_date_ms = parse_close_time_from_question(&question, Utc::now().date_naive())
         .map(|dt| dt.timestamp_millis())
         .or_else(|| match (slug_epoch_secs, duration_secs) {
             (Some(start), Some(dur)) => Some((start + dur) * 1000),
@@ -346,9 +346,17 @@ fn parse_market(
 /// - "Solana Up or Down - April 11, 8:00AM-8:15AM ET"
 /// - "BNB Up or Down - April 11, 9:30AM-9:45AM ET"
 ///
+/// `reference_date` supplies the year (question strings contain only month+day). Pass
+/// `Utc::now().date_naive()` for live markets. For historical resolution, pass the
+/// trade's own `timestamp.date_naive()` so that a December trade resolved in January
+/// doesn't jump forward by a year.
+///
 /// Returns the close time (the second time in the range) as UTC DateTime.
 /// ET (US Eastern) is UTC-4 during EDT and UTC-5 during EST.
-pub fn parse_close_time_from_question(question: &str) -> Option<chrono::DateTime<Utc>> {
+pub fn parse_close_time_from_question(
+    question: &str,
+    reference_date: NaiveDate,
+) -> Option<chrono::DateTime<Utc>> {
     let dash_idx = question.find(" - ")?;
     let after_dash = &question[dash_idx + 3..];
 
@@ -364,12 +372,19 @@ pub fn parse_close_time_from_question(question: &str) -> Option<chrono::DateTime
     let comma_idx = et_suffix.find(',')?;
     let date_part = et_suffix[..comma_idx].trim();
 
-    let now = Utc::now();
-    let year = now.year();
+    let mut year = reference_date.year();
 
     // Parse "April 11" -> NaiveDate
     let date_with_year = format!("{} {}", date_part, year);
-    let date = NaiveDate::parse_from_str(&date_with_year, "%B %d %Y").ok()?;
+    let mut date = NaiveDate::parse_from_str(&date_with_year, "%B %d %Y").ok()?;
+
+    // Heuristic: if the parsed date is >6 months ahead of the reference, the trade was
+    // likely placed in the previous year (e.g. December trade resolved in January).
+    if date.signed_duration_since(reference_date).num_days() > 180 {
+        year -= 1;
+        let retry = format!("{} {}", date_part, year);
+        date = NaiveDate::parse_from_str(&retry, "%B %d %Y").ok()?;
+    }
 
     // Parse "8:15AM" or "10:30PM" -> NaiveTime
     let close_time = parse_et_time(close_time_str)?;
@@ -589,32 +604,65 @@ mod tests {
 
     #[test]
     fn parse_close_time_from_question_15m_am() {
+        let ref_date = NaiveDate::from_ymd_opt(2026, 4, 11).unwrap();
         let q = "Solana Up or Down - April 11, 8:00AM-8:15AM ET";
-        let dt = parse_close_time_from_question(q).expect("should parse");
+        let dt = parse_close_time_from_question(q, ref_date).expect("should parse");
         // 8:15 AM ET (EDT, UTC-4) = 12:15 UTC
         assert_eq!(dt.format("%Y-%m-%d %H:%M").to_string(), "2026-04-11 12:15");
     }
 
     #[test]
     fn parse_close_time_from_question_15m_pm() {
+        let ref_date = NaiveDate::from_ymd_opt(2026, 4, 11).unwrap();
         let q = "BNB Up or Down - April 11, 3:45PM-4:00PM ET";
-        let dt = parse_close_time_from_question(q).expect("should parse");
+        let dt = parse_close_time_from_question(q, ref_date).expect("should parse");
         // 4:00 PM ET (EDT, UTC-4) = 20:00 UTC
         assert_eq!(dt.format("%Y-%m-%d %H:%M").to_string(), "2026-04-11 20:00");
     }
 
     #[test]
     fn parse_close_time_from_question_noon_boundary() {
+        let ref_date = NaiveDate::from_ymd_opt(2026, 4, 11).unwrap();
         let q = "Ethereum Up or Down - April 11, 11:45AM-12:00PM ET";
-        let dt = parse_close_time_from_question(q).expect("should parse");
+        let dt = parse_close_time_from_question(q, ref_date).expect("should parse");
         // 12:00 PM ET (EDT, UTC-4) = 16:00 UTC
         assert_eq!(dt.format("%Y-%m-%d %H:%M").to_string(), "2026-04-11 16:00");
     }
 
     #[test]
     fn parse_close_time_from_question_unrecognized_returns_none() {
-        assert!(parse_close_time_from_question("Will BTC go up?").is_none());
-        assert!(parse_close_time_from_question("Random question").is_none());
+        let ref_date = NaiveDate::from_ymd_opt(2026, 4, 11).unwrap();
+        assert!(parse_close_time_from_question("Will BTC go up?", ref_date).is_none());
+        assert!(parse_close_time_from_question("Random question", ref_date).is_none());
+    }
+
+    #[test]
+    fn parse_close_time_year_crossover_dec_trade_resolved_in_jan() {
+        // Trade placed December 30, 2026; bot resolves in January 2027.
+        // The question says "December 30" — if we used Jan 2027 as reference,
+        // the naive parse yields Dec 30 2027 (11 months ahead).
+        // With the heuristic it should fall back to Dec 30, 2026.
+        let ref_date = NaiveDate::from_ymd_opt(2026, 12, 30).unwrap();
+        let q = "BTC Up or Down - December 30, 3:00PM-3:15PM ET";
+        let dt = parse_close_time_from_question(q, ref_date).expect("should parse");
+        assert_eq!(dt.format("%Y-%m-%d %H:%M").to_string(), "2026-12-30 20:15");
+
+        // Now simulate resolution from January 5 2027 — reference_date is the trade's
+        // own timestamp (Dec 30 2026), so the year is still correct.
+        let ref_from_trade = NaiveDate::from_ymd_opt(2026, 12, 30).unwrap();
+        let dt2 = parse_close_time_from_question(q, ref_from_trade).expect("should parse");
+        assert_eq!(dt2.format("%Y-%m-%d %H:%M").to_string(), "2026-12-30 20:15");
+    }
+
+    #[test]
+    fn parse_close_time_heuristic_subtracts_year_when_far_ahead() {
+        // Reference is Jan 10 2027 (if someone passed now() instead of trade timestamp).
+        // Question says "December 30" → naive parse: Dec 30 2027, 354 days ahead > 180.
+        // Heuristic should correct to Dec 30 2026.
+        let ref_date = NaiveDate::from_ymd_opt(2027, 1, 10).unwrap();
+        let q = "BTC Up or Down - December 30, 3:00PM-3:15PM ET";
+        let dt = parse_close_time_from_question(q, ref_date).expect("should parse");
+        assert_eq!(dt.format("%Y-%m-%d %H:%M").to_string(), "2026-12-30 20:15");
     }
 
     #[test]

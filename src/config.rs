@@ -363,12 +363,34 @@ fn asset_upper_suffix(asset: &str) -> String {
     asset.trim().to_lowercase().to_uppercase()
 }
 
-fn env_vol_ratio_opt(prefix: &str, asset_upper: &str) -> Option<f64> {
-    let k = format!("{prefix}_{asset_upper}");
-    std::env::var(&k)
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .or_else(|| std::env::var(prefix).ok().and_then(|v| v.parse().ok()))
+fn env_toml_asset_opt_f64(
+    key: &str,
+    su: &str,
+    asset: Option<&AssetOverride>,
+    global: Option<f64>,
+    pick: impl FnOnce(&AssetOverride) -> Option<f64>,
+) -> Option<f64> {
+    let k = format!("{key}_{su}");
+    if let Ok(v) = std::env::var(&k) {
+        if !v.trim().is_empty() {
+            if let Ok(f) = v.parse() {
+                return Some(f);
+            }
+        }
+    }
+    if let Some(sec) = asset {
+        if let Some(f) = pick(sec) {
+            return Some(f);
+        }
+    }
+    if let Ok(v) = std::env::var(key) {
+        if !v.trim().is_empty() {
+            if let Ok(f) = v.parse() {
+                return Some(f);
+            }
+        }
+    }
+    global
 }
 
 fn parse_dec_str(os: &Option<String>) -> Option<Decimal> {
@@ -427,6 +449,7 @@ fn env_toml_string(key: &str, tom: Option<&String>, default: &str) -> String {
 fn env_toml_bool(key: &str, tom: Option<bool>, default: bool) -> bool {
     std::env::var(key)
         .ok()
+        .filter(|v| !v.trim().is_empty())
         .map(|v| matches!(v.to_lowercase().as_str(), "1" | "true" | "yes" | "on"))
         .or(tom)
         .unwrap_or(default)
@@ -514,7 +537,9 @@ fn env_toml_asset_bool(
 ) -> bool {
     let k = format!("{key}_{su}");
     if let Ok(v) = std::env::var(&k) {
-        return matches!(v.to_lowercase().as_str(), "1" | "true" | "yes" | "on");
+        if !v.trim().is_empty() {
+            return matches!(v.to_lowercase().as_str(), "1" | "true" | "yes" | "on");
+        }
     }
     if let Some(sec) = asset {
         if let Some(b) = pick(sec) {
@@ -522,7 +547,9 @@ fn env_toml_asset_bool(
         }
     }
     if let Ok(v) = std::env::var(key) {
-        return matches!(v.to_lowercase().as_str(), "1" | "true" | "yes" | "on");
+        if !v.trim().is_empty() {
+            return matches!(v.to_lowercase().as_str(), "1" | "true" | "yes" | "on");
+        }
     }
     global
 }
@@ -1068,9 +1095,13 @@ impl AppConfig {
             macd_signal: env_toml_asset_usize("MACD_SIGNAL", &su, a, self.macd_signal, |x| {
                 x.macd_signal
             }),
-            volume_min_ratio: env_vol_ratio_opt("VOLUME_MIN_RATIO", &su)
-                .or_else(|| a.and_then(|x| x.volume_min_ratio))
-                .or(self.volume_min_ratio),
+            volume_min_ratio: env_toml_asset_opt_f64(
+                "VOLUME_MIN_RATIO",
+                &su,
+                a,
+                self.volume_min_ratio,
+                |x| x.volume_min_ratio,
+            ),
             volume_avg_bars: env_toml_asset_usize(
                 "VOLUME_AVG_BARS",
                 &su,

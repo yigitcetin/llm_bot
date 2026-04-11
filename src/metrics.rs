@@ -2,6 +2,7 @@
 //!
 //! This is **not** Prometheus: scrape metrics live in [`crate::prometheus_export`] (`/metrics`).
 //! Trade resolutions are written back into the same `trades.jsonl` line when a market settles.
+//! Counterfactual (skipped) trades go to `shadow_trades.jsonl` with optional `skip_reason`.
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
@@ -85,6 +86,9 @@ pub struct TradeRecord {
     /// `filled` | `partial` | `expired` when order lifecycle is tracked (GTD); omitted on legacy rows.
     #[serde(default)]
     pub fill_status: Option<String>,
+    /// When set, this row is a counterfactual (skipped trade) logged to `shadow_trades.jsonl`.
+    #[serde(default)]
+    pub skip_reason: Option<String>,
 }
 
 impl TradeRecord {
@@ -146,6 +150,7 @@ impl TradeRecord {
             slippage_bps: None,
             effective_min_edge: None,
             fill_status: None,
+            skip_reason: None,
         }
     }
 }
@@ -153,6 +158,7 @@ impl TradeRecord {
 /// Logs trades and skips to JSON Lines files; updates `trades.jsonl` when positions resolve.
 pub struct MetricsLogger {
     trades_path: String,
+    shadow_trades_path: String,
     skips_path: String,
     order_failures_path: String,
 }
@@ -164,6 +170,7 @@ impl MetricsLogger {
 
         Ok(Self {
             trades_path: format!("{}/trades.jsonl", data_dir),
+            shadow_trades_path: format!("{}/shadow_trades.jsonl", data_dir),
             skips_path: format!("{}/skip_reasons.jsonl", data_dir),
             order_failures_path: format!("{}/order_failures.jsonl", data_dir),
         })
@@ -174,6 +181,13 @@ impl MetricsLogger {
         let json = serde_json::to_string(record).context("failed to serialize trade record")?;
 
         self.append_line(&self.trades_path, &json)
+    }
+
+    /// Log a counterfactual (shadow) trade to `shadow_trades.jsonl` for post-hoc PnL analysis.
+    pub fn log_shadow_trade(&self, record: &TradeRecord) -> Result<()> {
+        let json = serde_json::to_string(record).context("failed to serialize shadow trade record")?;
+
+        self.append_line(&self.shadow_trades_path, &json)
     }
 
     /// Update an existing trade line with resolution outcome and PnL (rewrites `trades.jsonl`).
@@ -274,6 +288,92 @@ impl MetricsLogger {
             }
         }
         Ok(unresolved)
+    }
+
+    /// Read unresolved shadow trades (`outcome == null`) from `shadow_trades.jsonl`.
+    pub fn read_unresolved_shadow_trades(&self) -> Result<Vec<TradeRecord>> {
+        let content = match std::fs::read_to_string(&self.shadow_trades_path) {
+            Ok(c) => c,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(e.into()),
+        };
+
+        let mut unresolved = Vec::new();
+        for line in content.lines() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            if let Ok(trade) = serde_json::from_str::<TradeRecord>(line) {
+                if trade.outcome.is_none() {
+                    unresolved.push(trade);
+                }
+            }
+        }
+        Ok(unresolved)
+    }
+
+    /// Update a shadow trade line with resolution (rewrites `shadow_trades.jsonl`).
+    pub fn update_shadow_trade_resolution(
+        &self,
+        condition_id: &str,
+        order_id: &str,
+        outcome: bool,
+        pnl: Decimal,
+    ) -> Result<()> {
+        let path = &self.shadow_trades_path;
+        let content = match std::fs::read_to_string(path) {
+            Ok(c) => c,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                warn!(path = %path, "shadow_trades.jsonl not found; cannot update resolution");
+                return Ok(());
+            }
+            Err(e) => {
+                return Err(e).with_context(|| format!("failed to read shadow trades file: {}", path));
+            }
+        };
+
+        let mut lines: Vec<String> = Vec::new();
+        let mut updated = false;
+
+        for line in content.lines() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            match serde_json::from_str::<TradeRecord>(line) {
+                Ok(mut trade) => {
+                    if trade.condition_id == condition_id
+                        && trade.order_id == order_id
+                        && trade.outcome.is_none()
+                    {
+                        trade.outcome = Some(outcome);
+                        trade.pnl = Some(pnl.to_string());
+                        trade.resolved_at = Some(Utc::now());
+                        updated = true;
+                    }
+                    lines.push(serde_json::to_string(&trade)?);
+                }
+                Err(_) => {
+                    lines.push(line.to_string());
+                }
+            }
+        }
+
+        if updated {
+            let mut file = std::fs::File::create(path)
+                .with_context(|| format!("failed to rewrite shadow trades file: {}", path))?;
+            for line in &lines {
+                writeln!(file, "{}", line)
+                    .with_context(|| format!("failed to write shadow trades file: {}", path))?;
+            }
+        } else {
+            warn!(
+                condition_id = %condition_id,
+                order_id = %order_id,
+                "no matching unresolved shadow trade in shadow_trades.jsonl for resolution update"
+            );
+        }
+
+        Ok(())
     }
 
     fn append_line(&self, path: &str, line: &str) -> Result<()> {
@@ -536,6 +636,42 @@ mod tests {
         logger
             .update_trade_resolution("x", "y", true, dec!(1))
             .expect("missing trades.jsonl should not error");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn update_shadow_trade_resolution_sets_outcome_pnl() {
+        let (logger, dir) = test_logger_in_temp();
+        let mut r = TradeRecord::new(
+            "0xshadow".to_string(),
+            "btc".to_string(),
+            "15m".to_string(),
+            Direction::Yes,
+            dec!(0.5),
+            dec!(5),
+            dec!(10),
+            dec!(0.6),
+            dec!(0.8),
+            dec!(0.1),
+            "s".to_string(),
+            "shadow-abc".to_string(),
+        );
+        r.skip_reason = Some("edge_too_small".to_string());
+        r.question = Some("Bitcoin Up or Down - April 11, 8:00AM-8:15AM ET".to_string());
+        logger.log_shadow_trade(&r).expect("log shadow");
+
+        logger
+            .update_shadow_trade_resolution("0xshadow", "shadow-abc", true, dec!(5))
+            .expect("update shadow");
+
+        let path = dir.join("shadow_trades.jsonl");
+        let line = fs::read_to_string(&path).expect("read shadow");
+        let t: TradeRecord = serde_json::from_str(line.lines().next().expect("line")).expect("parse");
+        assert_eq!(t.outcome, Some(true));
+        assert_eq!(t.pnl.as_deref(), Some("5"));
+        assert!(t.resolved_at.is_some());
+        assert_eq!(t.skip_reason.as_deref(), Some("edge_too_small"));
+
         let _ = fs::remove_dir_all(&dir);
     }
 }

@@ -93,6 +93,52 @@ pub fn recalculate_for_direction(
     })
 }
 
+/// Like [`calculate`] but ignores `min_edge` — always returns a [`TradeSignal`] for counterfactual / shadow logging.
+pub fn calculate_unchecked(
+    signal_probability: Decimal,
+    market_yes_price: Decimal,
+    slippage_bps: Decimal,
+) -> TradeSignal {
+    let edge_signed = signal_probability - market_yes_price;
+    let abs_edge = edge_signed.abs();
+    let direction = if edge_signed > Decimal::ZERO {
+        Direction::Yes
+    } else {
+        // Tie (`edge_signed == 0`) matches [`calculate`]'s negative branch (NO).
+        Direction::No
+    };
+
+    let token_price = token_price_for_direction(market_yes_price, direction, slippage_bps);
+
+    TradeSignal {
+        direction,
+        edge: abs_edge,
+        token_price,
+    }
+}
+
+/// Like [`recalculate_for_direction`] but always returns a trade for the forced direction (shadow / what-if).
+/// `edge` is `max(raw_edge, 0)` for the chosen side; pricing uses [`token_price_for_direction`].
+pub fn recalculate_for_direction_unchecked(
+    signal_probability: Decimal,
+    market_yes_price: Decimal,
+    forced_direction: Direction,
+    slippage_bps: Decimal,
+) -> TradeSignal {
+    let raw = match forced_direction {
+        Direction::Yes => signal_probability - market_yes_price,
+        Direction::No => (dec!(1) - signal_probability) - (dec!(1) - market_yes_price),
+    };
+    let edge = raw.max(Decimal::ZERO);
+    let token_price = token_price_for_direction(market_yes_price, forced_direction, slippage_bps);
+
+    TradeSignal {
+        direction: forced_direction,
+        edge,
+        token_price,
+    }
+}
+
 /// Raw half-Kelly USDC size before `min_order_usdc` floor (used by [`kelly_size_with_caps_detail`]).
 fn kelly_size_raw(
     edge: Decimal,
@@ -514,5 +560,28 @@ mod tests {
             .is_none(),
             "0.15 edge should not pass min_edge 0.20"
         );
+    }
+
+    #[test]
+    fn calculate_unchecked_matches_calculate_when_above_min_edge() {
+        let min = dec!(0.01);
+        let slip = dec!(0.002);
+        let t = calculate(dec!(0.6), dec!(0.5), min, slip).unwrap();
+        let u = calculate_unchecked(dec!(0.6), dec!(0.5), slip);
+        assert_eq!(t.direction, u.direction);
+        assert_eq!(t.edge, u.edge);
+        assert_eq!(t.token_price, u.token_price);
+    }
+
+    #[test]
+    fn recalculate_unchecked_returns_forced_side_even_when_below_min() {
+        let u = recalculate_for_direction_unchecked(
+            dec!(0.35),
+            dec!(0.60),
+            Direction::Yes,
+            dec!(0.002),
+        );
+        assert_eq!(u.direction, Direction::Yes);
+        assert_eq!(u.edge, Decimal::ZERO);
     }
 }

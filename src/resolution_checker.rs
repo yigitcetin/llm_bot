@@ -5,6 +5,7 @@
 //! 2. **File-based** via `resolve_unresolved_trades` — scans `trades.jsonl` for rows with
 //!    `outcome: null`, re-derives the true close time from the question string, and settles
 //!    them against the CLOB API. This covers dry-run trades and bot restarts.
+//! 3. **Shadow trades** via `resolve_unresolved_shadow_trades` — same as (2) for `shadow_trades.jsonl`.
 //!
 //! Market results come from the **CLOB API** (`GET /markets/{condition_id}`).
 
@@ -122,16 +123,16 @@ impl ResolutionChecker {
         let mut resolved_count = 0usize;
 
         for trade in &unresolved {
+            let ref_date = trade.timestamp.date_naive();
             let close_ms = trade
                 .question
                 .as_deref()
-                .and_then(parse_close_time_from_question)
+                .and_then(|q| parse_close_time_from_question(q, ref_date))
                 .map(|dt| dt.timestamp_millis());
 
             let market_closed = match close_ms {
                 Some(ms) => ms + 30_000 < now_ms,
                 None => {
-                    // Fallback: if question parsing fails, use secs_to_close from trade time
                     if let Some(secs) = trade.secs_to_close {
                         let trade_ms = trade.timestamp.timestamp_millis();
                         trade_ms + secs * 1000 + 30_000 < now_ms
@@ -205,6 +206,105 @@ impl ResolutionChecker {
                         condition_id = %trade.condition_id,
                         error = %e,
                         "failed to fetch market result for file-based resolution"
+                    );
+                }
+            }
+        }
+
+        Ok(resolved_count)
+    }
+
+    /// Same as [`Self::resolve_unresolved_trades`] but for `shadow_trades.jsonl` (counterfactual rows).
+    pub async fn resolve_unresolved_shadow_trades(&self, logger: &MetricsLogger) -> Result<usize> {
+        let unresolved = logger.read_unresolved_shadow_trades()?;
+        if unresolved.is_empty() {
+            return Ok(0);
+        }
+
+        let now_ms = Utc::now().timestamp_millis();
+        let mut resolved_count = 0usize;
+
+        for trade in &unresolved {
+            let ref_date = trade.timestamp.date_naive();
+            let close_ms = trade
+                .question
+                .as_deref()
+                .and_then(|q| parse_close_time_from_question(q, ref_date))
+                .map(|dt| dt.timestamp_millis());
+
+            let market_closed = match close_ms {
+                Some(ms) => ms + 30_000 < now_ms,
+                None => {
+                    if let Some(secs) = trade.secs_to_close {
+                        let trade_ms = trade.timestamp.timestamp_millis();
+                        trade_ms + secs * 1000 + 30_000 < now_ms
+                    } else {
+                        false
+                    }
+                }
+            };
+
+            if !market_closed {
+                continue;
+            }
+
+            info!(
+                condition_id = %trade.condition_id,
+                question = trade.question.as_deref().unwrap_or("?"),
+                "checking CLOB resolution for unresolved shadow trade"
+            );
+
+            match self.fetch_market_result(&trade.condition_id).await {
+                Ok(Some(yes_won)) => {
+                    let direction = if trade.direction == "YES" {
+                        Direction::Yes
+                    } else {
+                        Direction::No
+                    };
+                    let entry_price: Decimal = trade.entry_price.parse().unwrap_or(Decimal::ZERO);
+                    let size_usdc: Decimal = trade.size_usdc.parse().unwrap_or(Decimal::ZERO);
+                    let size_shares: Decimal = trade.size_shares.parse().unwrap_or(Decimal::ZERO);
+
+                    let pos = OpenPosition {
+                        condition_id: trade.condition_id.clone(),
+                        order_id: trade.order_id.clone(),
+                        direction,
+                        entry_price,
+                        size_usdc,
+                        size_shares,
+                        end_date_ms: close_ms.unwrap_or(0),
+                    };
+
+                    let pnl = pos.pnl_on_resolution(yes_won);
+
+                    if let Err(e) = logger.update_shadow_trade_resolution(
+                        &trade.condition_id,
+                        &trade.order_id,
+                        yes_won,
+                        pnl,
+                    ) {
+                        warn!(error = %e, "failed to update shadow trade resolution");
+                    } else {
+                        info!(
+                            condition_id = %trade.condition_id,
+                            yes_won,
+                            pnl = %pnl,
+                            "shadow trade resolved from file"
+                        );
+                        resolved_count += 1;
+                    }
+                }
+                Ok(None) => {
+                    info!(
+                        condition_id = %trade.condition_id,
+                        "shadow: market past close time but CLOB result not yet available"
+                    );
+                }
+                Err(e) => {
+                    warn!(
+                        condition_id = %trade.condition_id,
+                        error = %e,
+                        "failed to fetch market result for shadow trade resolution"
                     );
                 }
             }

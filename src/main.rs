@@ -152,6 +152,12 @@ async fn main() -> Result<()> {
             Err(e) => tracing::error!(error = %e, "resolve_unresolved_trades"),
             _ => {}
         }
+
+        match resolver.resolve_unresolved_shadow_trades(&logger).await {
+            Ok(n) if n > 0 => info!(resolved = n, "resolved shadow trades from shadow_trades.jsonl"),
+            Err(e) => tracing::error!(error = %e, "resolve_unresolved_shadow_trades"),
+            _ => {}
+        }
     }
 }
 
