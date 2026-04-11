@@ -1,5 +1,5 @@
 use anyhow::Result;
-use chrono::{Duration, TimeZone, Utc};
+use chrono::{Datelike, Duration, NaiveDate, NaiveTime, TimeZone, Utc};
 use rust_decimal::Decimal;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -275,20 +275,7 @@ fn utf8_snippet(bytes: &[u8]) -> String {
 /// Match Gamma event `slug` to configured `(asset, duration)`.
 fn slug_matches_configured_pair(slug: &str, asset: &str, duration: &str) -> bool {
     let standard = format!("{}-updown-{}", asset, duration);
-    if slug.starts_with(&standard) {
-        return true;
-    }
-    // Hourly markets use `up-or-down` and do not embed `1h` in the slug.
-    if duration == "1h" {
-        let alt = format!("{}-up-or-down", asset);
-        if slug.starts_with(&alt) {
-            return true;
-        }
-        if asset == "doge" && slug.starts_with("dogecoin-up-or-down") {
-            return true;
-        }
-    }
-    false
+    slug.starts_with(&standard)
 }
 
 fn parse_market(
@@ -301,18 +288,23 @@ fn parse_market(
     let condition_id = raw.condition_id?;
     let question = raw.question?;
 
-    // Parse end date, handling both old/new Gamma fields.
-    // If Gamma gives date-only values, fall back to slug epoch (+ duration).
-    let end_date_ms = raw
-        .end_date_iso
-        .as_deref()
-        .and_then(parse_gamma_datetime)
-        .or_else(|| raw.end_date.as_deref().and_then(parse_gamma_datetime))
+    // Priority order for end_date_ms:
+    // 1. Question string close time (most reliable for 15m/1h up-or-down markets)
+    // 2. Slug epoch + duration (for standard updown-{duration}-{epoch} slugs)
+    // 3. Gamma endDateIso / endDate fields (can be date-only → 23:59 UTC, unreliable)
+    let end_date_ms = parse_close_time_from_question(&question)
         .map(|dt| dt.timestamp_millis())
         .or_else(|| match (slug_epoch_secs, duration_secs) {
             (Some(start), Some(dur)) => Some((start + dur) * 1000),
             (Some(start), None) => Some(start * 1000),
             _ => None,
+        })
+        .or_else(|| {
+            raw.end_date_iso
+                .as_deref()
+                .and_then(parse_gamma_datetime)
+                .or_else(|| raw.end_date.as_deref().and_then(parse_gamma_datetime))
+                .map(|dt| dt.timestamp_millis())
         })?;
 
     let (yes_token_id, no_token_id) =
@@ -346,6 +338,100 @@ fn parse_market(
         yes_token_id,
         no_token_id,
     })
+}
+
+/// Extract the market close time from a Polymarket question string.
+///
+/// Handles formats like:
+/// - "Solana Up or Down - April 11, 8:00AM-8:15AM ET"
+/// - "BNB Up or Down - April 11, 9:30AM-9:45AM ET"
+///
+/// Returns the close time (the second time in the range) as UTC DateTime.
+/// ET (US Eastern) is UTC-4 during EDT and UTC-5 during EST.
+pub fn parse_close_time_from_question(question: &str) -> Option<chrono::DateTime<Utc>> {
+    let dash_idx = question.find(" - ")?;
+    let after_dash = &question[dash_idx + 3..];
+
+    // Expected: "April 11, 8:00AM-8:15AM ET" or "April 11, 8:00PM-8:15PM ET"
+    let et_suffix = after_dash.strip_suffix(" ET").or_else(|| after_dash.strip_suffix(" ET "))?;
+
+    // Split "April 11, 8:00AM-8:15AM" on the last '-' to get the close time
+    let time_range_sep = et_suffix.rfind('-')?;
+    let close_time_str = et_suffix[time_range_sep + 1..].trim();
+
+    // Date part: everything before the time range.
+    // "April 11, 8:00AM" -> need the "April 11" part
+    let comma_idx = et_suffix.find(',')?;
+    let date_part = et_suffix[..comma_idx].trim();
+
+    let now = Utc::now();
+    let year = now.year();
+
+    // Parse "April 11" -> NaiveDate
+    let date_with_year = format!("{} {}", date_part, year);
+    let date = NaiveDate::parse_from_str(&date_with_year, "%B %d %Y").ok()?;
+
+    // Parse "8:15AM" or "10:30PM" -> NaiveTime
+    let close_time = parse_et_time(close_time_str)?;
+
+    let naive_dt = date.and_time(close_time);
+
+    // ET offset: determine EDT vs EST based on date.
+    // EDT (UTC-4) runs ~ second Sunday of March to first Sunday of November.
+    let offset_hours = if is_edt(date) { 4 } else { 5 };
+    let utc_dt = naive_dt + chrono::Duration::hours(offset_hours);
+
+    Some(Utc.from_utc_datetime(&utc_dt))
+}
+
+/// Parse a time string like "8:15AM", "10:30PM", "12:00AM" into NaiveTime.
+fn parse_et_time(s: &str) -> Option<NaiveTime> {
+    let upper = s.trim().to_uppercase();
+    let is_pm = upper.ends_with("PM");
+    let time_part = upper.trim_end_matches("AM").trim_end_matches("PM");
+    let parts: Vec<&str> = time_part.split(':').collect();
+    if parts.len() != 2 {
+        return None;
+    }
+    let mut hour: u32 = parts[0].parse().ok()?;
+    let minute: u32 = parts[1].parse().ok()?;
+
+    if is_pm && hour != 12 {
+        hour += 12;
+    } else if !is_pm && hour == 12 {
+        hour = 0;
+    }
+
+    NaiveTime::from_hms_opt(hour, minute, 0)
+}
+
+/// Rough EDT check: EDT is active from second Sunday in March to first Sunday in November.
+fn is_edt(date: NaiveDate) -> bool {
+    use chrono::Weekday;
+    let (y, m, _d) = (date.year(), date.month(), date.day());
+    if !(3..=11).contains(&m) {
+        return false;
+    }
+    if m > 3 && m < 11 {
+        return true;
+    }
+    // March: EDT starts at the second Sunday
+    if m == 3 {
+        let first_day = NaiveDate::from_ymd_opt(y, 3, 1).unwrap();
+        let first_sunday = match first_day.weekday() {
+            Weekday::Sun => 1,
+            _ => 7 - first_day.weekday().num_days_from_sunday() + 1,
+        };
+        let second_sunday = first_sunday + 7;
+        return date.day() >= second_sunday;
+    }
+    // November: EDT ends at the first Sunday
+    let first_day = NaiveDate::from_ymd_opt(y, 11, 1).unwrap();
+    let first_sunday = match first_day.weekday() {
+        Weekday::Sun => 1,
+        _ => 7 - first_day.weekday().num_days_from_sunday() + 1,
+    };
+    date.day() < first_sunday
 }
 
 fn parse_gamma_datetime(s: &str) -> Option<chrono::DateTime<chrono::FixedOffset>> {
@@ -402,25 +488,11 @@ mod tests {
     }
 
     #[test]
-    fn slug_matches_hourly_up_or_down() {
-        assert!(slug_matches_configured_pair(
-            "bnb-up-or-down-april-11-2026-6am-et",
-            "bnb",
-            "1h"
-        ));
+    fn slug_does_not_match_up_or_down_format() {
         assert!(!slug_matches_configured_pair(
             "bnb-up-or-down-april-11-2026-6am-et",
             "bnb",
             "15m"
-        ));
-    }
-
-    #[test]
-    fn slug_matches_doge_dogecoin_alias() {
-        assert!(slug_matches_configured_pair(
-            "dogecoin-up-or-down-april-11-2026-6am-et",
-            "doge",
-            "1h"
         ));
         assert!(!slug_matches_configured_pair(
             "dogecoin-up-or-down-april-11-2026-6am-et",
@@ -513,5 +585,67 @@ mod tests {
         let m = parse_market(raw, "eth", "5m", None, Some(300)).unwrap();
         assert_eq!(m.yes_token_id, "999");
         assert_eq!(m.no_token_id, "888");
+    }
+
+    #[test]
+    fn parse_close_time_from_question_15m_am() {
+        let q = "Solana Up or Down - April 11, 8:00AM-8:15AM ET";
+        let dt = parse_close_time_from_question(q).expect("should parse");
+        // 8:15 AM ET (EDT, UTC-4) = 12:15 UTC
+        assert_eq!(dt.format("%Y-%m-%d %H:%M").to_string(), "2026-04-11 12:15");
+    }
+
+    #[test]
+    fn parse_close_time_from_question_15m_pm() {
+        let q = "BNB Up or Down - April 11, 3:45PM-4:00PM ET";
+        let dt = parse_close_time_from_question(q).expect("should parse");
+        // 4:00 PM ET (EDT, UTC-4) = 20:00 UTC
+        assert_eq!(dt.format("%Y-%m-%d %H:%M").to_string(), "2026-04-11 20:00");
+    }
+
+    #[test]
+    fn parse_close_time_from_question_noon_boundary() {
+        let q = "Ethereum Up or Down - April 11, 11:45AM-12:00PM ET";
+        let dt = parse_close_time_from_question(q).expect("should parse");
+        // 12:00 PM ET (EDT, UTC-4) = 16:00 UTC
+        assert_eq!(dt.format("%Y-%m-%d %H:%M").to_string(), "2026-04-11 16:00");
+    }
+
+    #[test]
+    fn parse_close_time_from_question_unrecognized_returns_none() {
+        assert!(parse_close_time_from_question("Will BTC go up?").is_none());
+        assert!(parse_close_time_from_question("Random question").is_none());
+    }
+
+    #[test]
+    fn is_edt_april_is_true() {
+        let d = NaiveDate::from_ymd_opt(2026, 4, 11).unwrap();
+        assert!(is_edt(d));
+    }
+
+    #[test]
+    fn is_edt_january_is_false() {
+        let d = NaiveDate::from_ymd_opt(2026, 1, 15).unwrap();
+        assert!(!is_edt(d));
+    }
+
+    #[test]
+    fn parse_et_time_basic() {
+        assert_eq!(
+            parse_et_time("8:15AM"),
+            NaiveTime::from_hms_opt(8, 15, 0)
+        );
+        assert_eq!(
+            parse_et_time("4:00PM"),
+            NaiveTime::from_hms_opt(16, 0, 0)
+        );
+        assert_eq!(
+            parse_et_time("12:00PM"),
+            NaiveTime::from_hms_opt(12, 0, 0)
+        );
+        assert_eq!(
+            parse_et_time("12:00AM"),
+            NaiveTime::from_hms_opt(0, 0, 0)
+        );
     }
 }

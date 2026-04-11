@@ -4,7 +4,7 @@
 
 [strategy]
 assets = ["btc", "eth", "sol", "xrp", "bnb", "doge"]
-durations = ["15m", "1h"]
+durations = ["15m"]
 gamma_tag_id = 102127
 min_edge = "0.10"
 min_confidence = "0.72"

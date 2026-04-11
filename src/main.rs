@@ -144,6 +144,14 @@ async fn main() -> Result<()> {
         resolver
             .check_and_resolve(&open, &mut risk, &logger)
             .await?;
+
+        // File-based resolution: resolve trades from trades.jsonl whose market close time
+        // (parsed from question string) has passed. Covers dry-run mode and bot restarts.
+        match resolver.resolve_unresolved_trades(&logger).await {
+            Ok(n) if n > 0 => info!(resolved = n, "resolved trades from trades.jsonl"),
+            Err(e) => tracing::error!(error = %e, "resolve_unresolved_trades"),
+            _ => {}
+        }
     }
 }
 

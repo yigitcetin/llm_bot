@@ -112,7 +112,6 @@ mod tests {
     fn parse_duration() {
         assert_eq!(parse_duration_to_secs("15m"), Some(900));
         assert_eq!(parse_duration_to_secs("5m"), Some(300));
-        assert_eq!(parse_duration_to_secs("1h"), Some(3600));
     }
 
     #[test]

@@ -254,6 +254,28 @@ impl MetricsLogger {
         self.append_line(&self.order_failures_path, &json)
     }
 
+    /// Read all unresolved trades (outcome == null) from `trades.jsonl`.
+    pub fn read_unresolved_trades(&self) -> Result<Vec<TradeRecord>> {
+        let content = match std::fs::read_to_string(&self.trades_path) {
+            Ok(c) => c,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(e.into()),
+        };
+
+        let mut unresolved = Vec::new();
+        for line in content.lines() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            if let Ok(trade) = serde_json::from_str::<TradeRecord>(line) {
+                if trade.outcome.is_none() {
+                    unresolved.push(trade);
+                }
+            }
+        }
+        Ok(unresolved)
+    }
+
     fn append_line(&self, path: &str, line: &str) -> Result<()> {
         let mut file = OpenOptions::new()
             .create(true)
