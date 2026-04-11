@@ -1,5 +1,5 @@
 use anyhow::Result;
-use chrono::{Duration, Utc};
+use chrono::{Duration, TimeZone, Utc};
 use rust_decimal::Decimal;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -129,7 +129,10 @@ impl GammaClient {
 
     /// Fetch active markets for configured assets/durations using Gamma `tag_id` + slug prefix.
     ///
-    /// Polymarket Gamma slugs: `{asset}-updown-{duration}-…`
+    /// Slug formats:
+    /// - `{asset}-updown-{duration}-…` (e.g. `btc-updown-15m-…`)
+    /// - `{asset}-up-or-down-…` for hourly markets when `duration` is `1h` (e.g. `bnb-up-or-down-april-…`)
+    /// - `dogecoin-up-or-down-…` when asset is `doge` and duration is `1h`
     pub async fn active_markets(
         &self,
         assets: &[String],
@@ -150,8 +153,7 @@ impl GammaClient {
             let mut matched: Option<(&str, &str)> = None;
             'pair: for asset in assets {
                 for duration in durations {
-                    let prefix = format!("{}-updown-{}", asset, duration);
-                    if slug.starts_with(&prefix) {
+                    if slug_matches_configured_pair(slug, asset, duration) {
                         matched = Some((asset.as_str(), duration.as_str()));
                         break 'pair;
                     }
@@ -270,6 +272,25 @@ fn utf8_snippet(bytes: &[u8]) -> String {
     s.chars().take(MAX).collect()
 }
 
+/// Match Gamma event `slug` to configured `(asset, duration)`.
+fn slug_matches_configured_pair(slug: &str, asset: &str, duration: &str) -> bool {
+    let standard = format!("{}-updown-{}", asset, duration);
+    if slug.starts_with(&standard) {
+        return true;
+    }
+    // Hourly markets use `up-or-down` and do not embed `1h` in the slug.
+    if duration == "1h" {
+        let alt = format!("{}-up-or-down", asset);
+        if slug.starts_with(&alt) {
+            return true;
+        }
+        if asset == "doge" && slug.starts_with("dogecoin-up-or-down") {
+            return true;
+        }
+    }
+    false
+}
+
 fn parse_market(
     raw: GammaMarket,
     asset: &str,
@@ -328,7 +349,18 @@ fn parse_market(
 }
 
 fn parse_gamma_datetime(s: &str) -> Option<chrono::DateTime<chrono::FixedOffset>> {
-    chrono::DateTime::parse_from_rfc3339(s).ok()
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
+        return Some(dt);
+    }
+    // Date-only `YYYY-MM-DD` from Gamma (hourly / daily events).
+    let t = s.trim();
+    if t.len() >= 10 {
+        if let Ok(d) = chrono::NaiveDate::parse_from_str(&t[..10], "%Y-%m-%d") {
+            let naive = d.and_hms_opt(23, 59, 59)?;
+            return Some(Utc.from_utc_datetime(&naive).fixed_offset());
+        }
+    }
+    None
 }
 
 fn parse_slug_epoch_secs(slug: &str) -> Option<i64> {
@@ -354,6 +386,56 @@ fn duration_to_secs(duration: &str) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn slug_matches_standard_updown() {
+        assert!(slug_matches_configured_pair(
+            "btc-updown-15m-1766162100",
+            "btc",
+            "15m"
+        ));
+        assert!(!slug_matches_configured_pair(
+            "btc-updown-15m-1766162100",
+            "eth",
+            "15m"
+        ));
+    }
+
+    #[test]
+    fn slug_matches_hourly_up_or_down() {
+        assert!(slug_matches_configured_pair(
+            "bnb-up-or-down-april-11-2026-6am-et",
+            "bnb",
+            "1h"
+        ));
+        assert!(!slug_matches_configured_pair(
+            "bnb-up-or-down-april-11-2026-6am-et",
+            "bnb",
+            "15m"
+        ));
+    }
+
+    #[test]
+    fn slug_matches_doge_dogecoin_alias() {
+        assert!(slug_matches_configured_pair(
+            "dogecoin-up-or-down-april-11-2026-6am-et",
+            "doge",
+            "1h"
+        ));
+        assert!(!slug_matches_configured_pair(
+            "dogecoin-up-or-down-april-11-2026-6am-et",
+            "doge",
+            "15m"
+        ));
+    }
+
+    #[test]
+    fn parse_gamma_datetime_accepts_date_only() {
+        use chrono::Timelike;
+        let dt = parse_gamma_datetime("2026-04-11").expect("date");
+        assert_eq!(dt.date_naive().to_string(), "2026-04-11");
+        assert_eq!(dt.time().hour(), 23);
+    }
 
     #[test]
     fn parse_market_valid() {

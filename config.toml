@@ -3,8 +3,8 @@
 # Override file path: CONFIG_PATH=/path/to/custom.toml
 
 [strategy]
-assets = ["btc", "eth", "sol", "xrp"]
-durations = ["15m"]
+assets = ["btc", "eth", "sol", "xrp", "bnb", "doge"]
+durations = ["15m", "1h"]
 gamma_tag_id = 102127
 min_edge = "0.10"
 min_confidence = "0.72"
@@ -32,7 +32,7 @@ min_market_yes_price = "0.15"
 max_market_yes_price = "0.92"
 min_secs_to_close = 120
 cluster_tie_min_edge_multiplier = 1.3
-min_momentum_5m_abs = 0.0004
+min_momentum_5m_abs = 0.0002
 neutral_taker_edge_multiplier = 1.5
 expiry_dampen_last_secs = 120
 cheap_token_price_threshold = "0.35"
@@ -77,13 +77,13 @@ volume_min_ratio = 0.6
 vol_min_std_pct = "0.025"
 vol_max_std_pct = "0.35"
 htf_enabled = true
-max_secs_to_close = 800
+max_secs_to_close = 900
 
 [asset.eth]
 min_edge = "0.01"
 min_confidence = "0.72"
 candle_lookback = 150
-volume_min_ratio = 0.7
+volume_min_ratio = 0.5
 vol_min_std_pct = "0.03"
 vol_max_std_pct = "0.40"
 macd_slow = 28
@@ -93,7 +93,7 @@ cluster_mom5_abs = 0.002
 cluster_mom15_abs = 0.004
 
 [asset.sol]
-min_edge = "0.01"
+min_edge = "0.03"
 volume_min_ratio = 0.4
 
 [asset.xrp]
@@ -101,3 +101,11 @@ min_edge = "0.01"
 min_confidence = "0.75"
 volume_min_ratio = 0.4
 vol_min_std_pct = "0.025"
+
+[asset.bnb]
+min_edge = "0.01"
+volume_min_ratio = 0.5
+
+[asset.doge]
+min_edge = "0.01"
+volume_min_ratio = 0.4
