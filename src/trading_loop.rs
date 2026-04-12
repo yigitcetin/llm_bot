@@ -69,6 +69,37 @@ fn compute_edge_min_for_trade_cluster(
     edge_min_for_trade
 }
 
+fn populate_direction_filter_telemetry(
+    record: &mut TradeRecord,
+    signal: &TechnicalSignal,
+    st: &AssetStrategy,
+    direction: Direction,
+) {
+    let dir_penalty = match direction {
+        Direction::Yes => st.yes_confidence_penalty,
+        Direction::No => st.no_confidence_penalty,
+    };
+    if dir_penalty > 0.0 {
+        let penalty_dec = Decimal::from_f64(dir_penalty).unwrap_or_default();
+        record.effective_confidence = Some((signal.confidence - penalty_dec).to_string());
+        record.direction_confidence_penalty = Some(dir_penalty.to_string());
+    } else {
+        record.effective_confidence = Some(signal.confidence.to_string());
+    }
+    record.min_macd_histogram_abs = (st.min_macd_histogram_abs > 0.0)
+        .then(|| st.min_macd_histogram_abs.to_string());
+    record.taker_direction_confirm = Some(st.taker_direction_confirm);
+    if st.taker_direction_confirm {
+        if let Some(tbr) = signal.taker_buy_ratio {
+            let aligned = match direction {
+                Direction::Yes => tbr > 0.55,
+                Direction::No => tbr < 0.45,
+            };
+            record.taker_direction_aligned = Some(aligned);
+        }
+    }
+}
+
 /// Log a hypothetical trade to `shadow_trades.jsonl` for counterfactual PnL (fixed $5 notional).
 #[allow(clippy::too_many_arguments)]
 fn log_shadow_counterfactual(
@@ -137,6 +168,7 @@ fn log_shadow_counterfactual(
     record.question = Some(market.question.clone());
     record.slippage_bps = Some(st.slippage_bps.to_string());
     record.effective_min_edge = Some(edge_min_for_trade.to_string());
+    populate_direction_filter_telemetry(&mut record, signal, st, hyp.direction);
 
     let _ = logger.log_shadow_trade(&record);
 }
@@ -429,6 +461,40 @@ pub async fn run_cycle(
             continue;
         }
 
+        if st.min_macd_histogram_abs > 0.0
+            && signal.macd_histogram.abs() < st.min_macd_histogram_abs
+        {
+            log_skip_decision(
+                logger,
+                &market,
+                "macd_histogram_too_weak",
+                Some(format!(
+                    "macd_histogram={:.8}, min_abs={:.8}",
+                    signal.macd_histogram, st.min_macd_histogram_abs
+                )),
+            );
+            let hyp = edge::calculate_unchecked(signal.probability, market.yes_price, st.slippage_bps);
+            log_shadow_counterfactual(
+                cfg,
+                logger,
+                &market,
+                &signal,
+                &st,
+                &hyp,
+                "macd_histogram_too_weak",
+                None,
+                None,
+            );
+            info!(
+                condition_id = %market.condition_id,
+                asset = %market.asset,
+                macd_histogram = signal.macd_histogram,
+                min_abs = st.min_macd_histogram_abs,
+                "skip: |MACD histogram| below minimum"
+            );
+            continue;
+        }
+
         if !passes_volatility_filter(&candles, &st.volatility_filter) {
             let vol_detail = compute_return_std_pct(&candles, st.volatility_filter.sample_bars)
                 .map(|v| {
@@ -569,6 +635,96 @@ pub async fn run_cycle(
             }
         };
 
+        let dir_penalty = match direction {
+            Direction::Yes => st.yes_confidence_penalty,
+            Direction::No => st.no_confidence_penalty,
+        };
+        if dir_penalty > 0.0 {
+            let penalty = Decimal::from_f64(dir_penalty).unwrap_or(Decimal::ZERO);
+            let penalized = signal.confidence - penalty;
+            if penalized < eff_min_confidence {
+                log_skip_decision(
+                    logger,
+                    &market,
+                    "direction_confidence_penalized",
+                    Some(format!(
+                        "confidence={}, penalized={}, penalty={}, threshold={}, direction={:?}",
+                        signal.confidence, penalized, dir_penalty, eff_min_confidence, direction
+                    )),
+                );
+                let vol_std_f = volatility_std_pct.and_then(|d| d.to_f64());
+                let hyp = edge::recalculate_for_direction_unchecked(
+                    signal.probability,
+                    market.yes_price,
+                    direction,
+                    st.slippage_bps,
+                );
+                log_shadow_counterfactual(
+                    cfg,
+                    logger,
+                    &market,
+                    &signal,
+                    &st,
+                    &hyp,
+                    "direction_confidence_penalized",
+                    htf_aligned,
+                    vol_std_f,
+                );
+                info!(
+                    condition_id = %market.condition_id,
+                    ?direction,
+                    penalized = %penalized,
+                    threshold = %eff_min_confidence,
+                    "skip: confidence below threshold after direction penalty"
+                );
+                continue;
+            }
+        }
+
+        if st.taker_direction_confirm {
+            if let Some(tbr) = signal.taker_buy_ratio {
+                let misaligned = match direction {
+                    Direction::Yes => tbr <= 0.55,
+                    Direction::No => tbr >= 0.45,
+                };
+                if misaligned {
+                    log_skip_decision(
+                        logger,
+                        &market,
+                        "taker_direction_misaligned",
+                        Some(format!(
+                            "taker_buy_ratio={tbr:.6}, direction={direction:?} (YES needs >0.55, NO needs <0.45)"
+                        )),
+                    );
+                    let vol_std_f = volatility_std_pct.and_then(|d| d.to_f64());
+                    let hyp = edge::recalculate_for_direction_unchecked(
+                        signal.probability,
+                        market.yes_price,
+                        direction,
+                        st.slippage_bps,
+                    );
+                    log_shadow_counterfactual(
+                        cfg,
+                        logger,
+                        &market,
+                        &signal,
+                        &st,
+                        &hyp,
+                        "taker_direction_misaligned",
+                        htf_aligned,
+                        vol_std_f,
+                    );
+                    info!(
+                        condition_id = %market.condition_id,
+                        ?direction,
+                        tbr,
+                        "skip: taker flow not aligned with trade direction"
+                    );
+                    continue;
+                }
+            }
+        }
+
         if let Some(blocked) = st.blocked_direction {
             if direction == blocked {
                 log_skip_decision(
@@ -688,7 +844,10 @@ pub async fn run_cycle(
                         direction,
                         st.slippage_bps,
                     );
-                    if hyp.edge > Decimal::ZERO {
+                    // `recalculate_for_direction_unchecked` uses `max(raw_edge, 0)`; negative raw edges
+                    // become 0 here. Accept `>= 0` so forced matcher direction still trades when the
+                    // model edge is negative but the market price skew favors the forced side.
+                    if hyp.edge >= Decimal::ZERO {
                         trade = hyp;
                         info!(
                             condition_id = %market.condition_id,
@@ -987,6 +1146,7 @@ pub async fn run_cycle(
                     record.question = Some(market.question.clone());
                     record.slippage_bps = Some(st.slippage_bps.to_string());
                     record.effective_min_edge = Some(edge_min_for_trade.to_string());
+                    populate_direction_filter_telemetry(&mut record, &signal, &st, trade.direction);
                     record.fill_status = Some("filled".to_string());
                     let _ = logger.log_trade(&record);
 

@@ -80,6 +80,14 @@ pub struct ClusterSection {
     pub rsi_yes_max: Option<f64>,
     /// Skip BUY NO when RSI is below this (oversold fade). `0` = off.
     pub rsi_no_min: Option<f64>,
+    /// Skip when `|MACD histogram|` is below this (weak signal). `0` = off.
+    pub min_macd_histogram_abs: Option<f64>,
+    /// Require taker flow aligned with trade direction (YES needs TBR>0.55, NO needs TBR<0.45).
+    pub taker_direction_confirm: Option<bool>,
+    /// Subtract from confidence before threshold when trading YES (soft veto).
+    pub yes_confidence_penalty: Option<f64>,
+    /// Subtract from confidence before threshold when trading NO (soft veto).
+    pub no_confidence_penalty: Option<f64>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -176,6 +184,10 @@ pub struct AssetOverride {
     pub neutral_taker_edge_multiplier: Option<f64>,
     pub rsi_yes_max: Option<f64>,
     pub rsi_no_min: Option<f64>,
+    pub min_macd_histogram_abs: Option<f64>,
+    pub taker_direction_confirm: Option<bool>,
+    pub yes_confidence_penalty: Option<f64>,
+    pub no_confidence_penalty: Option<f64>,
 }
 
 /// Read and parse `CONFIG_PATH` (default `config.toml`). Missing file → `None`.

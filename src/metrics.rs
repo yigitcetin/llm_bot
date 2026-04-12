@@ -89,6 +89,21 @@ pub struct TradeRecord {
     /// When set, this row is a counterfactual (skipped trade) logged to `shadow_trades.jsonl`.
     #[serde(default)]
     pub skip_reason: Option<String>,
+    /// Effective confidence after direction penalty (or raw when no penalty); snapshot for analysis.
+    #[serde(default)]
+    pub effective_confidence: Option<String>,
+    /// Direction-specific confidence penalty active at trade time (`0` when off).
+    #[serde(default)]
+    pub direction_confidence_penalty: Option<String>,
+    /// Snapshot of `min_macd_histogram_abs` when greater than 0 for this asset.
+    #[serde(default)]
+    pub min_macd_histogram_abs: Option<String>,
+    /// Whether `taker_direction_confirm` was active for this asset.
+    #[serde(default)]
+    pub taker_direction_confirm: Option<bool>,
+    /// Whether taker flow aligned with direction when filter on and TBR available.
+    #[serde(default)]
+    pub taker_direction_aligned: Option<bool>,
 }
 
 impl TradeRecord {
@@ -151,6 +166,11 @@ impl TradeRecord {
             effective_min_edge: None,
             fill_status: None,
             skip_reason: None,
+            effective_confidence: None,
+            direction_confidence_penalty: None,
+            min_macd_histogram_abs: None,
+            taker_direction_confirm: None,
+            taker_direction_aligned: None,
         }
     }
 }

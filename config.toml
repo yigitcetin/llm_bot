@@ -37,6 +37,11 @@ min_secs_to_close = 250
 cluster_tie_min_edge_multiplier = 1.3
 min_momentum_5m_abs = 0.0002
 neutral_taker_edge_multiplier = 1.5
+# Global defaults for direction-quality filters (0 / false = off; per-asset overrides below).
+min_macd_histogram_abs = 0.0
+taker_direction_confirm = false
+yes_confidence_penalty = 0.0
+no_confidence_penalty = 0.0
 expiry_dampen_last_secs = 120
 cheap_token_price_threshold = "0.35"
 cheap_token_max_usdc = "5"
@@ -81,6 +86,7 @@ vol_min_std_pct = "0.025"
 vol_max_std_pct = "0.35"
 htf_enabled = true
 max_secs_to_close = 900
+taker_direction_confirm = true
 
 [asset.eth]
 min_edge = "0.015"
@@ -90,14 +96,18 @@ volume_min_ratio = 0.5
 vol_min_std_pct = "0.03"
 vol_max_std_pct = "0.40"
 macd_slow = 28
-htf_enabled = true
+htf_enabled = false
 cluster_rsi_oversold = 30.0
 cluster_mom5_abs = 0.002
 cluster_mom15_abs = 0.004
+taker_direction_confirm = true
 
 [asset.sol]
 min_edge = "0.025"
 volume_min_ratio = 0.4
+min_macd_histogram_abs = 0.005
+yes_confidence_penalty = 0.15
+rsi_yes_max = 55.0
 
 [asset.xrp]
 min_edge = "0.01"
@@ -105,13 +115,18 @@ min_confidence = "0.75"
 volume_min_ratio = 0.4
 vol_min_std_pct = "0.025"
 htf_enabled = false
+rsi_yes_max = 55.0
+rsi_no_min = 35.0
 
 [asset.bnb]
 min_edge = "0.01"
 volume_min_ratio = 0.5
 htf_enabled = false
+min_macd_histogram_abs = 0.02
+taker_direction_confirm = true
 
 [asset.doge]
 min_edge = "0.01"
 volume_min_ratio = 0.4
 htf_enabled = false
+taker_direction_confirm = true

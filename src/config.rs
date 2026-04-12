@@ -110,6 +110,14 @@ pub struct AppConfig {
     pub rsi_yes_max: f64,
     /// Skip BUY NO when RSI is below this (`0` = off). Default 30.
     pub rsi_no_min: f64,
+    /// Skip when `|MACD histogram|` &lt; this (`0` = off).
+    pub min_macd_histogram_abs: f64,
+    /// Require taker flow aligned with direction (YES: TBR&gt;0.55, NO: TBR&lt;0.45) when TBR is known.
+    pub taker_direction_confirm: bool,
+    /// Subtract from effective confidence when trading YES (`0` = off).
+    pub yes_confidence_penalty: f64,
+    /// Subtract from effective confidence when trading NO (`0` = off).
+    pub no_confidence_penalty: f64,
 
     /// Parsed `config.toml` for per-asset TOML fallbacks (environment still wins).
     pub(crate) toml: Option<Arc<TomlRoot>>,
@@ -177,6 +185,12 @@ pub struct AssetStrategy {
     pub rsi_yes_max: f64,
     /// Skip BUY NO when RSI is below this (`0` = off).
     pub rsi_no_min: f64,
+    /// Skip when `|MACD histogram|` &lt; this (`0` = off).
+    pub min_macd_histogram_abs: f64,
+    /// Require taker flow aligned with direction when TBR is known.
+    pub taker_direction_confirm: bool,
+    pub yes_confidence_penalty: f64,
+    pub no_confidence_penalty: f64,
     /// Slippage fraction for edge sizing and order worst-price limit.
     pub slippage_bps: Decimal,
     pub max_secs_to_close: Option<i64>,
@@ -323,6 +337,24 @@ impl AssetStrategy {
                 "RSI_NO_MIN_* ({}) must be < RSI_YES_MAX_* ({}) when both are enabled",
                 self.rsi_no_min,
                 self.rsi_yes_max
+            );
+        }
+        if self.min_macd_histogram_abs < 0.0 || self.min_macd_histogram_abs > 1.0 {
+            anyhow::bail!(
+                "MIN_MACD_HISTOGRAM_ABS_* must be in [0.0, 1.0] (0 = off), got: {}",
+                self.min_macd_histogram_abs
+            );
+        }
+        if self.yes_confidence_penalty < 0.0 || self.yes_confidence_penalty > 0.5 {
+            anyhow::bail!(
+                "YES_CONFIDENCE_PENALTY_* must be in [0.0, 0.5], got: {}",
+                self.yes_confidence_penalty
+            );
+        }
+        if self.no_confidence_penalty < 0.0 || self.no_confidence_penalty > 0.5 {
+            anyhow::bail!(
+                "NO_CONFIDENCE_PENALTY_* must be in [0.0, 0.5], got: {}",
+                self.no_confidence_penalty
             );
         }
         if self.slippage_bps <= Decimal::ZERO || self.slippage_bps > dec!(0.05) {
@@ -1016,6 +1048,30 @@ impl AppConfig {
                 30.0,
             ),
 
+            min_macd_histogram_abs: env_toml_f64(
+                "MIN_MACD_HISTOGRAM_ABS",
+                tc.and_then(|c| c.min_macd_histogram_abs),
+                0.0,
+            ),
+
+            taker_direction_confirm: env_toml_bool(
+                "TAKER_DIRECTION_CONFIRM",
+                tc.and_then(|c| c.taker_direction_confirm),
+                false,
+            ),
+
+            yes_confidence_penalty: env_toml_f64(
+                "YES_CONFIDENCE_PENALTY",
+                tc.and_then(|c| c.yes_confidence_penalty),
+                0.0,
+            ),
+
+            no_confidence_penalty: env_toml_f64(
+                "NO_CONFIDENCE_PENALTY",
+                tc.and_then(|c| c.no_confidence_penalty),
+                0.0,
+            ),
+
             toml: toml_arc,
         };
 
@@ -1284,6 +1340,34 @@ impl AppConfig {
                 self.rsi_no_min,
                 |x| x.rsi_no_min,
             ),
+            min_macd_histogram_abs: env_toml_asset_f64(
+                "MIN_MACD_HISTOGRAM_ABS",
+                &su,
+                a,
+                self.min_macd_histogram_abs,
+                |x| x.min_macd_histogram_abs,
+            ),
+            taker_direction_confirm: env_toml_asset_bool(
+                "TAKER_DIRECTION_CONFIRM",
+                &su,
+                a,
+                self.taker_direction_confirm,
+                |x| x.taker_direction_confirm,
+            ),
+            yes_confidence_penalty: env_toml_asset_f64(
+                "YES_CONFIDENCE_PENALTY",
+                &su,
+                a,
+                self.yes_confidence_penalty,
+                |x| x.yes_confidence_penalty,
+            ),
+            no_confidence_penalty: env_toml_asset_f64(
+                "NO_CONFIDENCE_PENALTY",
+                &su,
+                a,
+                self.no_confidence_penalty,
+                |x| x.no_confidence_penalty,
+            ),
             slippage_bps: env_toml_asset_decimal("SLIPPAGE_BPS", &su, a, self.slippage_bps, |x| {
                 x.slippage_bps.as_ref()
             }),
@@ -1413,6 +1497,24 @@ impl AppConfig {
                 self.rsi_yes_max
             );
         }
+        if self.min_macd_histogram_abs < 0.0 || self.min_macd_histogram_abs > 1.0 {
+            anyhow::bail!(
+                "MIN_MACD_HISTOGRAM_ABS must be in [0.0, 1.0] (0 = off), got: {}",
+                self.min_macd_histogram_abs
+            );
+        }
+        if self.yes_confidence_penalty < 0.0 || self.yes_confidence_penalty > 0.5 {
+            anyhow::bail!(
+                "YES_CONFIDENCE_PENALTY must be in [0.0, 0.5], got: {}",
+                self.yes_confidence_penalty
+            );
+        }
+        if self.no_confidence_penalty < 0.0 || self.no_confidence_penalty > 0.5 {
+            anyhow::bail!(
+                "NO_CONFIDENCE_PENALTY must be in [0.0, 0.5], got: {}",
+                self.no_confidence_penalty
+            );
+        }
         if self.slippage_bps <= Decimal::ZERO || self.slippage_bps > dec!(0.05) {
             anyhow::bail!(
                 "SLIPPAGE_BPS must be in (0, 0.05], got: {}",
@@ -1512,6 +1614,10 @@ impl Default for AppConfig {
             neutral_taker_edge_multiplier: 1.0,
             rsi_yes_max: 70.0,
             rsi_no_min: 30.0,
+            min_macd_histogram_abs: 0.0,
+            taker_direction_confirm: false,
+            yes_confidence_penalty: 0.0,
+            no_confidence_penalty: 0.0,
 
             toml: None,
         }
