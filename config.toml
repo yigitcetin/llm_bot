@@ -28,12 +28,12 @@ rsi_oversold = 35.0
 rsi_overbought = 65.0
 # Direction veto: skip BUY YES when RSI above this; skip BUY NO when RSI below this (0 = off).
 rsi_yes_max = 70.0
-rsi_no_min = 30.0
+rsi_no_min = 15.0
 mom5_abs = 0.003
 mom15_abs = 0.005
 min_market_yes_price = "0.08"
 max_market_yes_price = "0.55"
-min_secs_to_close = 120
+min_secs_to_close = 250
 cluster_tie_min_edge_multiplier = 1.3
 min_momentum_5m_abs = 0.0002
 neutral_taker_edge_multiplier = 1.5
@@ -83,7 +83,7 @@ htf_enabled = true
 max_secs_to_close = 900
 
 [asset.eth]
-min_edge = "0.03"
+min_edge = "0.015"
 min_confidence = "0.72"
 candle_lookback = 150
 volume_min_ratio = 0.5
@@ -96,7 +96,7 @@ cluster_mom5_abs = 0.002
 cluster_mom15_abs = 0.004
 
 [asset.sol]
-min_edge = "0.04"
+min_edge = "0.025"
 volume_min_ratio = 0.4
 
 [asset.xrp]
@@ -104,11 +104,14 @@ min_edge = "0.01"
 min_confidence = "0.75"
 volume_min_ratio = 0.4
 vol_min_std_pct = "0.025"
+htf_enabled = false
 
 [asset.bnb]
 min_edge = "0.01"
 volume_min_ratio = 0.5
+htf_enabled = false
 
 [asset.doge]
 min_edge = "0.01"
 volume_min_ratio = 0.4
+htf_enabled = false

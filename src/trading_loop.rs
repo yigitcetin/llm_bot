@@ -680,40 +680,54 @@ pub async fn run_cycle(
             ) {
                 Some(recalc) => trade = recalc,
                 None => {
-                    log_skip_decision(
-                        logger,
-                        &market,
-                        "no_edge_after_direction_override",
-                        Some(format!(
-                            "signal_prob={}, yes_price={}, forced_dir={:?}",
-                            signal.probability, market.yes_price, direction,
-                        )),
-                    );
+                    // Forced direction has edge below `min_edge` but may still be positive;
+                    // accept when raw edge for that side is > 0 (see profitability plan / shadow data).
                     let hyp = edge::recalculate_for_direction_unchecked(
                         signal.probability,
                         market.yes_price,
                         direction,
                         st.slippage_bps,
                     );
-                    let vol_std_f = volatility_std_pct.and_then(|d| d.to_f64());
-                    log_shadow_counterfactual(
-                        cfg,
-                        logger,
-                        &market,
-                        &signal,
-                        &st,
-                        &hyp,
-                        "no_edge_after_direction_override",
-                        htf_aligned,
-                        vol_std_f,
-                    );
-                    info!(
-                        condition_id = %market.condition_id,
-                        question = %market.question,
-                        ?direction,
-                        "skip: no positive edge for market_matcher direction"
-                    );
-                    continue;
+                    if hyp.edge > Decimal::ZERO {
+                        trade = hyp;
+                        info!(
+                            condition_id = %market.condition_id,
+                            question = %market.question,
+                            ?direction,
+                            edge = %trade.edge,
+                            threshold = %edge_min_for_trade,
+                            "accept: forced market_matcher direction with positive edge below min_edge"
+                        );
+                    } else {
+                        log_skip_decision(
+                            logger,
+                            &market,
+                            "no_edge_after_direction_override",
+                            Some(format!(
+                                "signal_prob={}, yes_price={}, forced_dir={:?}",
+                                signal.probability, market.yes_price, direction,
+                            )),
+                        );
+                        let vol_std_f = volatility_std_pct.and_then(|d| d.to_f64());
+                        log_shadow_counterfactual(
+                            cfg,
+                            logger,
+                            &market,
+                            &signal,
+                            &st,
+                            &hyp,
+                            "no_edge_after_direction_override",
+                            htf_aligned,
+                            vol_std_f,
+                        );
+                        info!(
+                            condition_id = %market.condition_id,
+                            question = %market.question,
+                            ?direction,
+                            "skip: no positive edge for market_matcher direction"
+                        );
+                        continue;
+                    }
                 }
             }
         }
