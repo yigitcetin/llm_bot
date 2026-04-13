@@ -119,6 +119,21 @@ pub struct AppConfig {
     /// Subtract from effective confidence when trading NO (`0` = off).
     pub no_confidence_penalty: f64,
 
+    /// Scale `min_momentum_5m_abs` by current vol / reference vol when true.
+    pub dynamic_momentum_threshold: bool,
+    /// Reference volatility for dynamic momentum scaling (e.g. 0.03).
+    pub momentum_vol_reference: f64,
+    /// Auto-adjust direction penalty from recent per-direction WR.
+    pub adaptive_direction_penalty: bool,
+    /// Rolling window size for adaptive direction penalty WR calculation.
+    pub adaptive_penalty_window: usize,
+    /// Fetch a second timeframe and boost/penalize confidence on agreement/conflict.
+    pub multi_tf_enabled: bool,
+    /// Candle interval for the secondary timeframe (e.g. "5m").
+    pub multi_tf_interval: String,
+    /// Number of candles to fetch for the secondary timeframe.
+    pub multi_tf_lookback: usize,
+
     /// Parsed `config.toml` for per-asset TOML fallbacks (environment still wins).
     pub(crate) toml: Option<Arc<TomlRoot>>,
 }
@@ -196,6 +211,16 @@ pub struct AssetStrategy {
     pub max_secs_to_close: Option<i64>,
     /// Never take this side for this asset (`None` = allow both).
     pub blocked_direction: Option<Direction>,
+    /// Scale `min_momentum_5m_abs` by current vol / reference vol.
+    pub dynamic_momentum_threshold: bool,
+    pub momentum_vol_reference: f64,
+    /// Auto-adjust direction penalty from recent per-direction WR.
+    pub adaptive_direction_penalty: bool,
+    pub adaptive_penalty_window: usize,
+    /// Fetch a second timeframe for confidence adjustment.
+    pub multi_tf_enabled: bool,
+    pub multi_tf_interval: String,
+    pub multi_tf_lookback: usize,
 }
 
 impl AssetStrategy {
@@ -1072,6 +1097,42 @@ impl AppConfig {
                 0.0,
             ),
 
+            dynamic_momentum_threshold: env_toml_bool(
+                "DYNAMIC_MOMENTUM_THRESHOLD",
+                tc.and_then(|c| c.dynamic_momentum_threshold),
+                false,
+            ),
+            momentum_vol_reference: env_toml_f64(
+                "MOMENTUM_VOL_REFERENCE",
+                tc.and_then(|c| c.momentum_vol_reference),
+                0.03,
+            ),
+            adaptive_direction_penalty: env_toml_bool(
+                "ADAPTIVE_DIRECTION_PENALTY",
+                tc.and_then(|c| c.adaptive_direction_penalty),
+                false,
+            ),
+            adaptive_penalty_window: env_toml_usize(
+                "ADAPTIVE_PENALTY_WINDOW",
+                tc.and_then(|c| c.adaptive_penalty_window),
+                10,
+            ),
+            multi_tf_enabled: env_toml_bool(
+                "MULTI_TF_ENABLED",
+                tc.and_then(|c| c.multi_tf_enabled),
+                false,
+            ),
+            multi_tf_interval: env_toml_string(
+                "MULTI_TF_INTERVAL",
+                tc.and_then(|c| c.multi_tf_interval.as_ref()),
+                "5m",
+            ),
+            multi_tf_lookback: env_toml_usize(
+                "MULTI_TF_LOOKBACK",
+                tc.and_then(|c| c.multi_tf_lookback),
+                30,
+            ),
+
             toml: toml_arc,
         };
 
@@ -1386,6 +1447,55 @@ impl AppConfig {
                     .and_then(|t| t.strategy.as_ref())
                     .and_then(|s| s.blocked_direction.as_deref()),
             ),
+            dynamic_momentum_threshold: env_toml_asset_bool(
+                "DYNAMIC_MOMENTUM_THRESHOLD",
+                &su,
+                a,
+                self.dynamic_momentum_threshold,
+                |x| x.dynamic_momentum_threshold,
+            ),
+            momentum_vol_reference: env_toml_asset_f64(
+                "MOMENTUM_VOL_REFERENCE",
+                &su,
+                a,
+                self.momentum_vol_reference,
+                |x| x.momentum_vol_reference,
+            ),
+            adaptive_direction_penalty: env_toml_asset_bool(
+                "ADAPTIVE_DIRECTION_PENALTY",
+                &su,
+                a,
+                self.adaptive_direction_penalty,
+                |x| x.adaptive_direction_penalty,
+            ),
+            adaptive_penalty_window: env_toml_asset_usize(
+                "ADAPTIVE_PENALTY_WINDOW",
+                &su,
+                a,
+                self.adaptive_penalty_window,
+                |x| x.adaptive_penalty_window,
+            ),
+            multi_tf_enabled: env_toml_asset_bool(
+                "MULTI_TF_ENABLED",
+                &su,
+                a,
+                self.multi_tf_enabled,
+                |x| x.multi_tf_enabled,
+            ),
+            multi_tf_interval: env_toml_asset_string(
+                "MULTI_TF_INTERVAL",
+                &su,
+                a,
+                &self.multi_tf_interval,
+                |x| x.multi_tf_interval.as_ref(),
+            ),
+            multi_tf_lookback: env_toml_asset_usize(
+                "MULTI_TF_LOOKBACK",
+                &su,
+                a,
+                self.multi_tf_lookback,
+                |x| x.multi_tf_lookback,
+            ),
         }
     }
 
@@ -1618,6 +1728,13 @@ impl Default for AppConfig {
             taker_direction_confirm: false,
             yes_confidence_penalty: 0.0,
             no_confidence_penalty: 0.0,
+            dynamic_momentum_threshold: false,
+            momentum_vol_reference: 0.03,
+            adaptive_direction_penalty: false,
+            adaptive_penalty_window: 10,
+            multi_tf_enabled: false,
+            multi_tf_interval: "5m".to_string(),
+            multi_tf_lookback: 30,
 
             toml: None,
         }

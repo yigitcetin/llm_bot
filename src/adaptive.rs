@@ -55,6 +55,54 @@ pub fn effective_thresholds(
     (eff_edge, eff_conf)
 }
 
+/// Compute an adaptive direction penalty from recent per-direction win rate.
+///
+/// Returns `(effective_penalty, direction_wr)`. When disabled or insufficient data,
+/// returns `(base_penalty, None)`.
+pub fn adaptive_direction_penalty(
+    trades_path: &str,
+    asset: &str,
+    direction_str: &str,
+    base_penalty: f64,
+    window: usize,
+    enabled: bool,
+) -> (f64, Option<f64>) {
+    if !enabled || window < 5 {
+        return (base_penalty, None);
+    }
+
+    let trades = match read_trades_from_path(trades_path) {
+        Ok(t) => t,
+        Err(_) => return (base_penalty, None),
+    };
+
+    let mut dir_trades: Vec<&TradeRecord> = trades
+        .iter()
+        .filter(|t| t.asset == asset && t.direction == direction_str && t.outcome.is_some())
+        .collect();
+    if dir_trades.len() > window {
+        dir_trades = dir_trades[dir_trades.len() - window..].to_vec();
+    }
+    let n = dir_trades.len();
+    if n < 5 {
+        return (base_penalty, None);
+    }
+
+    let wins = dir_trades.iter().filter(|t| trade_won(t)).count();
+    let wr = wins as f64 / n as f64;
+
+    let penalty = if wr < 0.40 {
+        (base_penalty + 0.05).min(0.50)
+    } else if wr < 0.50 {
+        base_penalty
+    } else if wr < 0.60 {
+        base_penalty * 0.5
+    } else {
+        0.0
+    };
+    (penalty, Some(wr))
+}
+
 fn trade_won(t: &TradeRecord) -> bool {
     let Some(outcome) = t.outcome else {
         return false;

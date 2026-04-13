@@ -104,6 +104,16 @@ pub struct TradeRecord {
     /// Whether taker flow aligned with direction when filter on and TBR available.
     #[serde(default)]
     pub taker_direction_aligned: Option<bool>,
+    #[serde(default)]
+    pub effective_momentum_threshold: Option<String>,
+    #[serde(default)]
+    pub adaptive_penalty_applied: Option<String>,
+    #[serde(default)]
+    pub direction_wr_at_trade: Option<String>,
+    #[serde(default)]
+    pub multi_tf_direction_agreement: Option<bool>,
+    #[serde(default)]
+    pub multi_tf_confidence_adj: Option<String>,
 }
 
 impl TradeRecord {
@@ -171,6 +181,11 @@ impl TradeRecord {
             min_macd_histogram_abs: None,
             taker_direction_confirm: None,
             taker_direction_aligned: None,
+            effective_momentum_threshold: None,
+            adaptive_penalty_applied: None,
+            direction_wr_at_trade: None,
+            multi_tf_direction_agreement: None,
+            multi_tf_confidence_adj: None,
         }
     }
 }

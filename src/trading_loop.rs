@@ -308,38 +308,41 @@ pub async fn run_cycle(
     }
 
     let candle_batches = join_all(filtered.into_iter().map(|(market, st)| async move {
-        if st.htf_enabled {
-            let (primary_res, htf_res) = tokio::join!(
-                spot.fetch_candles_at_exchange(
-                    &market.asset,
-                    &st.candle_interval,
-                    st.candle_lookback,
-                    &st.spot_exchange,
-                ),
-                spot.fetch_candles_at_exchange(
-                    &market.asset,
-                    &st.htf_interval,
-                    st.htf_lookback,
-                    &st.spot_exchange,
-                ),
-            );
-            (market, st, primary_res, Some(htf_res))
-        } else {
-            let primary_res = spot
-                .fetch_candles_at_exchange(
-                    &market.asset,
-                    &st.candle_interval,
-                    st.candle_lookback,
-                    &st.spot_exchange,
-                )
-                .await;
-            (market, st, primary_res, None)
+        let need_htf = st.htf_enabled;
+        let need_mtf = st.multi_tf_enabled;
+        match (need_htf, need_mtf) {
+            (true, true) => {
+                let (primary_res, htf_res, mtf_res) = tokio::join!(
+                    spot.fetch_candles_at_exchange(&market.asset, &st.candle_interval, st.candle_lookback, &st.spot_exchange),
+                    spot.fetch_candles_at_exchange(&market.asset, &st.htf_interval, st.htf_lookback, &st.spot_exchange),
+                    spot.fetch_candles_at_exchange(&market.asset, &st.multi_tf_interval, st.multi_tf_lookback, &st.spot_exchange),
+                );
+                (market, st, primary_res, Some(htf_res), Some(mtf_res))
+            }
+            (true, false) => {
+                let (primary_res, htf_res) = tokio::join!(
+                    spot.fetch_candles_at_exchange(&market.asset, &st.candle_interval, st.candle_lookback, &st.spot_exchange),
+                    spot.fetch_candles_at_exchange(&market.asset, &st.htf_interval, st.htf_lookback, &st.spot_exchange),
+                );
+                (market, st, primary_res, Some(htf_res), None)
+            }
+            (false, true) => {
+                let (primary_res, mtf_res) = tokio::join!(
+                    spot.fetch_candles_at_exchange(&market.asset, &st.candle_interval, st.candle_lookback, &st.spot_exchange),
+                    spot.fetch_candles_at_exchange(&market.asset, &st.multi_tf_interval, st.multi_tf_lookback, &st.spot_exchange),
+                );
+                (market, st, primary_res, None, Some(mtf_res))
+            }
+            (false, false) => {
+                let primary_res = spot.fetch_candles_at_exchange(&market.asset, &st.candle_interval, st.candle_lookback, &st.spot_exchange).await;
+                (market, st, primary_res, None, None)
+            }
         }
     }))
     .await;
 
     // Phase 2: sequential signal / edge / risk / order (fan-in).
-    for (market, st, primary_res, htf_res_opt) in candle_batches {
+    for (market, st, primary_res, htf_res_opt, mtf_res_opt) in candle_batches {
         let mut htf_aligned: Option<bool> = None;
         let signal_config = st.signal_config();
 
@@ -429,14 +432,50 @@ pub async fn run_cycle(
         signal =
             apply_market_timing_to_signal(signal, &market, window_secs, st.expiry_dampen_last_secs);
 
-        if st.min_momentum_5m_abs > 0.0 && signal.momentum_5m.abs() < st.min_momentum_5m_abs {
+        let mut multi_tf_agreement: Option<bool> = None;
+        let mut multi_tf_conf_adj: Option<f64> = None;
+        if st.multi_tf_enabled {
+            if let Some(Ok(mtf_candles)) = mtf_res_opt {
+                if mtf_candles.len() >= MIN_CANDLES_FOR_SIGNAL {
+                    if let Ok(mtf_signal_arc) = indicator_cache.get_or_compute(
+                        &market.asset, &st.multi_tf_interval, &mtf_candles, &signal_config,
+                    ) {
+                        let mtf_sig = &*mtf_signal_arc;
+                        let primary_up = signal.macd_histogram > 0.0 && signal.momentum_5m > 0.0;
+                        let mtf_up = mtf_sig.macd_histogram > 0.0 && mtf_sig.momentum_5m > 0.0;
+                        let agrees = primary_up == mtf_up;
+                        multi_tf_agreement = Some(agrees);
+                        let adj = if agrees { 0.03 } else { -0.03 };
+                        multi_tf_conf_adj = Some(adj);
+                        let adj_dec = Decimal::from_f64(adj).unwrap_or(Decimal::ZERO);
+                        signal.confidence = signal.confidence + adj_dec;
+                    }
+                }
+            }
+        }
+
+        let effective_momentum_threshold = if st.dynamic_momentum_threshold && st.min_momentum_5m_abs > 0.0 {
+            let vol_std = compute_return_std_pct(&candles, st.volatility_filter.sample_bars)
+                .and_then(|d| d.to_f64())
+                .unwrap_or(st.momentum_vol_reference);
+            let ratio = if st.momentum_vol_reference > 0.0 {
+                vol_std / st.momentum_vol_reference
+            } else {
+                1.0
+            };
+            st.min_momentum_5m_abs * ratio
+        } else {
+            st.min_momentum_5m_abs
+        };
+
+        if effective_momentum_threshold > 0.0 && signal.momentum_5m.abs() < effective_momentum_threshold {
             log_skip_decision(
                 logger,
                 &market,
                 "momentum_5m_too_weak",
                 Some(format!(
-                    "momentum_5m={:.6}, min_abs={:.6}",
-                    signal.momentum_5m, st.min_momentum_5m_abs
+                    "momentum_5m={:.6}, eff_min_abs={:.6}, dynamic={}",
+                    signal.momentum_5m, effective_momentum_threshold, st.dynamic_momentum_threshold
                 )),
             );
             let hyp = edge::calculate_unchecked(signal.probability, market.yes_price, st.slippage_bps);
@@ -455,7 +494,7 @@ pub async fn run_cycle(
                 condition_id = %market.condition_id,
                 asset = %market.asset,
                 momentum_5m = signal.momentum_5m,
-                min_abs = st.min_momentum_5m_abs,
+                eff_min_abs = effective_momentum_threshold,
                 "skip: |momentum_5m| below minimum"
             );
             continue;
@@ -635,9 +674,19 @@ pub async fn run_cycle(
             }
         };
 
-        let dir_penalty = match direction {
+        let base_dir_penalty = match direction {
             Direction::Yes => st.yes_confidence_penalty,
             Direction::No => st.no_confidence_penalty,
+        };
+        let (dir_penalty, adaptive_dir_wr) = if st.adaptive_direction_penalty {
+            let dir_str = match direction { Direction::Yes => "YES", Direction::No => "NO" };
+            let trades_path = format!("{}/trades.jsonl", cfg.data_dir);
+            adaptive::adaptive_direction_penalty(
+                &trades_path, &market.asset, dir_str,
+                base_dir_penalty, st.adaptive_penalty_window, true,
+            )
+        } else {
+            (base_dir_penalty, None)
         };
         if dir_penalty > 0.0 {
             let penalty = Decimal::from_f64(dir_penalty).unwrap_or(Decimal::ZERO);
@@ -648,8 +697,8 @@ pub async fn run_cycle(
                     &market,
                     "direction_confidence_penalized",
                     Some(format!(
-                        "confidence={}, penalized={}, penalty={}, threshold={}, direction={:?}",
-                        signal.confidence, penalized, dir_penalty, eff_min_confidence, direction
+                        "confidence={}, penalized={}, penalty={}, threshold={}, direction={:?}, adaptive={}",
+                        signal.confidence, penalized, dir_penalty, eff_min_confidence, direction, st.adaptive_direction_penalty
                     )),
                 );
                 let vol_std_f = volatility_std_pct.and_then(|d| d.to_f64());
@@ -1147,6 +1196,15 @@ pub async fn run_cycle(
                     record.slippage_bps = Some(st.slippage_bps.to_string());
                     record.effective_min_edge = Some(edge_min_for_trade.to_string());
                     populate_direction_filter_telemetry(&mut record, &signal, &st, trade.direction);
+                    if st.dynamic_momentum_threshold {
+                        record.effective_momentum_threshold = Some(format!("{:.8}", effective_momentum_threshold));
+                    }
+                    if st.adaptive_direction_penalty {
+                        record.adaptive_penalty_applied = Some(format!("{:.4}", dir_penalty));
+                        record.direction_wr_at_trade = adaptive_dir_wr.map(|w| format!("{:.4}", w));
+                    }
+                    record.multi_tf_direction_agreement = multi_tf_agreement;
+                    record.multi_tf_confidence_adj = multi_tf_conf_adj.map(|a| format!("{:.4}", a));
                     record.fill_status = Some("filled".to_string());
                     let _ = logger.log_trade(&record);
 
