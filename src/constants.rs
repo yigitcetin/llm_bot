@@ -3,8 +3,8 @@ use rust_decimal_macros::dec;
 
 // ── Trading Parameters ────────────────────────────────────────────────────────
 
-/// Minimum liquidity threshold for markets (in USDC)
-pub const MIN_LIQUIDITY_USDC: Decimal = dec!(1000);
+/// Default minimum liquidity threshold for markets (in USDC). Override via `min_liquidity` in `config.toml` or `MIN_LIQUIDITY_USDC`.
+pub const MIN_LIQUIDITY_USDC: Decimal = dec!(8000);
 
 /// Minimum time until market close (in seconds)
 pub const MIN_MARKET_CLOSE_TIME_SECS: i64 = 90;

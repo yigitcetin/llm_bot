@@ -20,6 +20,7 @@ pub struct TomlRoot {
     pub htf: Option<HtfSection>,
     pub adaptive: Option<AdaptiveSection>,
     pub execution: Option<ExecutionSection>,
+    pub shadow_calibration: Option<ShadowCalibrationSection>,
     /// Per-asset overrides: `[asset.btc]`, `[asset.eth]`, …
     pub asset: Option<HashMap<String, AssetOverride>>,
 }
@@ -64,6 +65,8 @@ pub struct ClusterSection {
     pub min_market_yes_price: Option<String>,
     pub max_market_yes_price: Option<String>,
     pub min_secs_to_close: Option<i64>,
+    /// Minimum Gamma-reported market liquidity (USDC) to trade. Overrides code default [`crate::constants::MIN_LIQUIDITY_USDC`].
+    pub min_liquidity: Option<String>,
     /// Skip when remaining time exceeds this (too far from expiry). `None` = off.
     pub max_secs_to_close: Option<i64>,
     pub expiry_dampen_last_secs: Option<i64>,
@@ -152,6 +155,22 @@ pub struct ExecutionSection {
     pub poll_min_order_age_secs: Option<u64>,
 }
 
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default)]
+pub struct ShadowCalibrationSection {
+    pub enabled: Option<bool>,
+    pub min_trades: Option<usize>,
+    pub cooldown_secs: Option<u64>,
+    pub min_pnl_delta: Option<String>,
+    pub max_step_pct: Option<f64>,
+    pub safety_bound_low: Option<f64>,
+    pub safety_bound_high: Option<f64>,
+    pub rollback_window: Option<usize>,
+    pub rollback_threshold: Option<f64>,
+    pub bool_toggle_min_trades: Option<usize>,
+    pub exclude_params: Option<Vec<String>>,
+}
+
 /// Fields mirror per-asset env keys (`MIN_EDGE_BTC`, …) without the `_ASSET` suffix.
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(default)]
@@ -180,6 +199,8 @@ pub struct AssetOverride {
     pub adaptive_thresholds: Option<bool>,
     pub adaptive_trade_window: Option<usize>,
     pub min_secs_to_close: Option<i64>,
+    /// Per-asset override for minimum market liquidity (USDC).
+    pub min_liquidity: Option<String>,
     pub max_secs_to_close: Option<i64>,
     pub expiry_dampen_last_secs: Option<i64>,
     pub min_market_yes_price: Option<String>,

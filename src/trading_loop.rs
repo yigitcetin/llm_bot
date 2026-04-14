@@ -10,7 +10,7 @@ use tracing::info;
 
 use crate::adaptive;
 use crate::config::{AppConfig, AssetStrategy};
-use crate::constants::{MIN_CANDLES_FOR_SIGNAL, MIN_LIQUIDITY_USDC};
+use crate::constants::MIN_CANDLES_FOR_SIGNAL;
 use crate::edge;
 use crate::execution::Executor;
 use crate::gamma::GammaClient;
@@ -200,21 +200,21 @@ fn passes_pre_candle_filters(
         return false;
     }
 
-    if market.liquidity < MIN_LIQUIDITY_USDC {
+    if market.liquidity < st.min_liquidity_usdc {
         log_skip_decision(
             logger,
             market,
             "liquidity_too_low",
             Some(format!(
                 "liquidity={}, min={}",
-                market.liquidity, MIN_LIQUIDITY_USDC
+                market.liquidity, st.min_liquidity_usdc
             )),
         );
         info!(
             condition_id = %market.condition_id,
             question = %market.question,
             liquidity = %market.liquidity,
-            min_liquidity = %MIN_LIQUIDITY_USDC,
+            min_liquidity = %st.min_liquidity_usdc,
             "skip: liquidity too low"
         );
         return false;
@@ -302,24 +302,34 @@ pub async fn run_cycle(
     indicator_cache: &mut IndicatorCache,
     logger: &MetricsLogger,
     order_tracker: &mut OrderTracker,
+    shadow_calibrator: Option<&crate::shadow_calibrator::ShadowCalibrator>,
 ) -> Result<()> {
     let markets = gamma.active_markets(&cfg.assets, &cfg.durations).await?;
     prometheus_export::add_markets_scanned(markets.len() as u64);
     info!(count = markets.len(), "markets fetched");
 
     // Phase 1: cheap filters, then parallel Binance fetches (fan-out).
-    let mut filtered: Vec<(Market, AssetStrategy)> = Vec::new();
+    let mut filtered: Vec<(Market, AssetStrategy, Option<u64>)> = Vec::new();
     for market in markets {
-        let st = cfg.asset_strategy(&market.asset);
+        let mut st = cfg.asset_strategy(&market.asset);
+        let cal_version = if let Some(cal) = shadow_calibrator {
+            if let Some(ov) = cal.get_overrides(&market.asset) {
+                crate::shadow_calibrator::apply_overrides(&mut st, ov);
+                cal.current_version_for_asset(&market.asset)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
         if passes_pre_candle_filters(&market, &st, risk, logger) {
-            filtered.push((market, st));
+            filtered.push((market, st, cal_version));
         }
     }
 
-    let candle_batches = join_all(filtered.into_iter().map(|(market, st)| async move {
+    let candle_batches = join_all(filtered.into_iter().map(|(market, st, cv)| async move {
         let need_htf = st.htf_enabled;
         let need_mtf = st.multi_tf_enabled;
-        // `generate_signal` requires MIN_CANDLES_FOR_SIGNAL bars; multi-TF lookback must cover that.
         let mtf_lookback = st.multi_tf_lookback.max(MIN_CANDLES_FOR_SIGNAL);
         match (need_htf, need_mtf) {
             (true, true) => {
@@ -328,32 +338,32 @@ pub async fn run_cycle(
                     spot.fetch_candles_at_exchange(&market.asset, &st.htf_interval, st.htf_lookback, &st.spot_exchange),
                     spot.fetch_candles_at_exchange(&market.asset, &st.multi_tf_interval, mtf_lookback, &st.spot_exchange),
                 );
-                (market, st, primary_res, Some(htf_res), Some(mtf_res))
+                (market, st, cv, primary_res, Some(htf_res), Some(mtf_res))
             }
             (true, false) => {
                 let (primary_res, htf_res) = tokio::join!(
                     spot.fetch_candles_at_exchange(&market.asset, &st.candle_interval, st.candle_lookback, &st.spot_exchange),
                     spot.fetch_candles_at_exchange(&market.asset, &st.htf_interval, st.htf_lookback, &st.spot_exchange),
                 );
-                (market, st, primary_res, Some(htf_res), None)
+                (market, st, cv, primary_res, Some(htf_res), None)
             }
             (false, true) => {
                 let (primary_res, mtf_res) = tokio::join!(
                     spot.fetch_candles_at_exchange(&market.asset, &st.candle_interval, st.candle_lookback, &st.spot_exchange),
                     spot.fetch_candles_at_exchange(&market.asset, &st.multi_tf_interval, mtf_lookback, &st.spot_exchange),
                 );
-                (market, st, primary_res, None, Some(mtf_res))
+                (market, st, cv, primary_res, None, Some(mtf_res))
             }
             (false, false) => {
                 let primary_res = spot.fetch_candles_at_exchange(&market.asset, &st.candle_interval, st.candle_lookback, &st.spot_exchange).await;
-                (market, st, primary_res, None, None)
+                (market, st, cv, primary_res, None, None)
             }
         }
     }))
     .await;
 
     // Phase 2: sequential signal / edge / risk / order (fan-in).
-    for (market, st, primary_res, htf_res_opt, mtf_res_opt) in candle_batches {
+    for (market, st, cal_version, primary_res, htf_res_opt, mtf_res_opt) in candle_batches {
         let mut htf_aligned: Option<bool> = None;
         let signal_config = st.signal_config();
 
@@ -1214,6 +1224,7 @@ pub async fn run_cycle(
                     record.multi_tf_direction_agreement = multi_tf_agreement;
                     record.multi_tf_confidence_adj = multi_tf_conf_adj.map(|a| format!("{:.4}", a));
                     record.fill_status = Some("filled".to_string());
+                    record.calibration_version = cal_version;
                     let _ = logger.log_trade(&record);
 
                     info!(

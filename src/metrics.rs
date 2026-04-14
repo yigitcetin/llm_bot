@@ -114,6 +114,9 @@ pub struct TradeRecord {
     pub multi_tf_direction_agreement: Option<bool>,
     #[serde(default)]
     pub multi_tf_confidence_adj: Option<String>,
+    /// Shadow calibration version active when this trade was placed (`None` = base config).
+    #[serde(default)]
+    pub calibration_version: Option<u64>,
 }
 
 impl TradeRecord {
@@ -186,6 +189,7 @@ impl TradeRecord {
             direction_wr_at_trade: None,
             multi_tf_direction_agreement: None,
             multi_tf_confidence_adj: None,
+            calibration_version: None,
         }
     }
 }

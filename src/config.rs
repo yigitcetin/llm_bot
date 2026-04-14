@@ -6,7 +6,8 @@ use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 
 use crate::config_toml::{AssetOverride, TomlRoot};
-use crate::constants::{GAMMA_TAG_ID_DEFAULT, SLIPPAGE_BPS};
+use crate::constants::{GAMMA_TAG_ID_DEFAULT, MIN_LIQUIDITY_USDC, SLIPPAGE_BPS};
+use crate::shadow_calibrator::ShadowCalibrationConfig;
 use crate::signals::SignalConfig;
 use crate::types::Direction;
 use crate::volatility::VolatilityFilterConfig;
@@ -88,6 +89,8 @@ pub struct AppConfig {
     pub min_market_yes_price: Option<Decimal>,
     /// Reject if Gamma YES mid &gt; this. `None` = off.
     pub max_market_yes_price: Option<Decimal>,
+    /// Skip when Gamma-reported market liquidity is below this (USDC).
+    pub min_liquidity_usdc: Decimal,
     /// Token price below this → position USDC capped (see `cheap_token_max_usdc`).
     pub cheap_token_price_threshold: Decimal,
     pub cheap_token_max_usdc: Decimal,
@@ -149,6 +152,9 @@ pub struct AppConfig {
     pub taker_neutral_low: f64,
     pub taker_neutral_high: f64,
 
+    /// Shadow calibration configuration.
+    pub shadow_calibration: ShadowCalibrationConfig,
+
     /// Parsed `config.toml` for per-asset TOML fallbacks (environment still wins).
     pub(crate) toml: Option<Arc<TomlRoot>>,
 }
@@ -198,6 +204,8 @@ pub struct AssetStrategy {
     pub expiry_dampen_last_secs: Option<i64>,
     pub min_market_yes_price: Option<Decimal>,
     pub max_market_yes_price: Option<Decimal>,
+    /// Skip when Gamma-reported market liquidity is below this (USDC).
+    pub min_liquidity_usdc: Decimal,
     pub cheap_token_price_threshold: Decimal,
     pub cheap_token_max_usdc: Decimal,
     pub large_order_usdc_hard_cap: Option<Decimal>,
@@ -433,6 +441,12 @@ impl AssetStrategy {
             anyhow::bail!(
                 "CHEAP_TOKEN_MAX_USDC_* too low: {}",
                 self.cheap_token_max_usdc
+            );
+        }
+        if self.min_liquidity_usdc <= Decimal::ZERO {
+            anyhow::bail!(
+                "MIN_LIQUIDITY_USDC_* must be positive, got: {}",
+                self.min_liquidity_usdc
             );
         }
         if self.cluster_down_confidence_add < 0.0 || self.cluster_down_confidence_add > 0.30 {
@@ -1070,6 +1084,12 @@ impl AppConfig {
                 parse_dec_str(&tc.and_then(|c| c.max_market_yes_price.clone())),
             ),
 
+            min_liquidity_usdc: env_toml_decimal(
+                "MIN_LIQUIDITY_USDC",
+                parse_dec_str(&tc.and_then(|c| c.min_liquidity.clone())),
+                MIN_LIQUIDITY_USDC,
+            ),
+
             cheap_token_price_threshold: env_toml_decimal(
                 "CHEAP_TOKEN_PRICE_THRESHOLD",
                 parse_dec_str(&tc.and_then(|c| c.cheap_token_price_threshold.clone())),
@@ -1243,6 +1263,65 @@ impl AppConfig {
                 tc.and_then(|c| c.taker_neutral_high),
                 0.55,
             ),
+
+            shadow_calibration: {
+                let sc = r.and_then(|x| x.shadow_calibration.as_ref());
+                ShadowCalibrationConfig {
+                    enabled: env_toml_bool(
+                        "SHADOW_CALIBRATION_ENABLED",
+                        sc.and_then(|s| s.enabled),
+                        false,
+                    ),
+                    min_trades: env_toml_usize(
+                        "SHADOW_CALIBRATION_MIN_TRADES",
+                        sc.and_then(|s| s.min_trades),
+                        20,
+                    ),
+                    cooldown_secs: std::env::var("SHADOW_CALIBRATION_COOLDOWN_SECS")
+                        .ok()
+                        .and_then(|v| v.parse().ok())
+                        .or(sc.and_then(|s| s.cooldown_secs))
+                        .unwrap_or(3600),
+                    min_pnl_delta: env_toml_decimal(
+                        "SHADOW_CALIBRATION_MIN_PNL_DELTA",
+                        parse_dec_str(&sc.and_then(|s| s.min_pnl_delta.clone())),
+                        dec!(10),
+                    ),
+                    max_step_pct: env_toml_f64(
+                        "SHADOW_CALIBRATION_MAX_STEP_PCT",
+                        sc.and_then(|s| s.max_step_pct),
+                        0.20,
+                    ),
+                    safety_bound_low: env_toml_f64(
+                        "SHADOW_CALIBRATION_SAFETY_BOUND_LOW",
+                        sc.and_then(|s| s.safety_bound_low),
+                        0.50,
+                    ),
+                    safety_bound_high: env_toml_f64(
+                        "SHADOW_CALIBRATION_SAFETY_BOUND_HIGH",
+                        sc.and_then(|s| s.safety_bound_high),
+                        2.0,
+                    ),
+                    rollback_window: env_toml_usize(
+                        "SHADOW_CALIBRATION_ROLLBACK_WINDOW",
+                        sc.and_then(|s| s.rollback_window),
+                        10,
+                    ),
+                    rollback_threshold: env_toml_f64(
+                        "SHADOW_CALIBRATION_ROLLBACK_THRESHOLD",
+                        sc.and_then(|s| s.rollback_threshold),
+                        0.30,
+                    ),
+                    bool_toggle_min_trades: env_toml_usize(
+                        "SHADOW_CALIBRATION_BOOL_TOGGLE_MIN_TRADES",
+                        sc.and_then(|s| s.bool_toggle_min_trades),
+                        30,
+                    ),
+                    exclude_params: sc
+                        .and_then(|s| s.exclude_params.clone())
+                        .unwrap_or_default(),
+                }
+            },
 
             toml: toml_arc,
         };
@@ -1420,6 +1499,13 @@ impl AppConfig {
                 a,
                 self.max_market_yes_price,
                 |x| x.max_market_yes_price.as_ref(),
+            ),
+            min_liquidity_usdc: env_toml_asset_decimal(
+                "MIN_LIQUIDITY_USDC",
+                &su,
+                a,
+                self.min_liquidity_usdc,
+                |x| x.min_liquidity.as_ref(),
             ),
             cheap_token_price_threshold: env_toml_asset_decimal(
                 "CHEAP_TOKEN_PRICE_THRESHOLD",
@@ -1718,6 +1804,13 @@ impl AppConfig {
             );
         }
 
+        if self.min_liquidity_usdc <= Decimal::ZERO {
+            anyhow::bail!(
+                "MIN_LIQUIDITY_USDC must be positive, got: {}",
+                self.min_liquidity_usdc
+            );
+        }
+
         if self.assets.is_empty() {
             anyhow::bail!("ASSETS cannot be empty");
         }
@@ -1925,6 +2018,7 @@ impl Default for AppConfig {
             expiry_dampen_last_secs: None,
             min_market_yes_price: None,
             max_market_yes_price: None,
+            min_liquidity_usdc: MIN_LIQUIDITY_USDC,
             cheap_token_price_threshold: dec!(0.15),
             cheap_token_max_usdc: dec!(5),
             large_order_usdc_hard_cap: None,
@@ -1958,6 +2052,8 @@ impl Default for AppConfig {
             taker_no_max_ratio: 0.45,
             taker_neutral_low: 0.45,
             taker_neutral_high: 0.55,
+
+            shadow_calibration: ShadowCalibrationConfig::default(),
 
             toml: None,
         }

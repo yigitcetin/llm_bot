@@ -17,6 +17,7 @@ use polymarket_llm_bot::order_tracker::OrderTracker;
 use polymarket_llm_bot::prometheus_export;
 use polymarket_llm_bot::resolution_checker;
 use polymarket_llm_bot::risk;
+use polymarket_llm_bot::shadow_calibrator::ShadowCalibrator;
 use polymarket_llm_bot::spot_price;
 use polymarket_llm_bot::telemetry;
 use polymarket_llm_bot::trading_loop::run_cycle;
@@ -77,7 +78,19 @@ async fn main() -> Result<()> {
     let mut indicator_cache =
         indicator_cache::IndicatorCache::new(constants::INDICATOR_CACHE_MAX_AGE_SECS);
 
-    info!("all components initialized, entering main loop");
+    let mut shadow_calibrator =
+        ShadowCalibrator::new(&cfg.data_dir, cfg.shadow_calibration.clone());
+
+    let base_strategies: std::collections::HashMap<String, polymarket_llm_bot::config::AssetStrategy> = cfg
+        .assets
+        .iter()
+        .map(|a| (a.clone(), cfg.asset_strategy(a)))
+        .collect();
+
+    info!(
+        shadow_calibration = cfg.shadow_calibration.enabled,
+        "all components initialized, entering main loop"
+    );
 
     loop {
         if let Err(e) = order_tracker.process_fill_channel(&mut fill_rx, &mut risk, &logger) {
@@ -93,6 +106,11 @@ async fn main() -> Result<()> {
         );
 
         let cycle_start = std::time::Instant::now();
+        let cal_ref = if cfg.shadow_calibration.enabled {
+            Some(&shadow_calibrator)
+        } else {
+            None
+        };
         let cycle_result = run_cycle(
             &cfg,
             &gamma,
@@ -102,6 +120,7 @@ async fn main() -> Result<()> {
             &mut indicator_cache,
             &logger,
             &mut order_tracker,
+            cal_ref,
         )
         .instrument(tracing::info_span!("trading_cycle"))
         .await;
@@ -158,6 +177,8 @@ async fn main() -> Result<()> {
             Err(e) => tracing::error!(error = %e, "resolve_unresolved_shadow_trades"),
             _ => {}
         }
+
+        shadow_calibrator.maybe_recalibrate(&cfg.assets, &base_strategies);
     }
 }
 

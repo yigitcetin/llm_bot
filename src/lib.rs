@@ -23,6 +23,7 @@ pub mod order_tracker;
 pub mod prometheus_export;
 pub mod resolution_checker;
 pub mod risk;
+pub mod shadow_calibrator;
 pub mod signal_extensions;
 pub mod spot_price;
 pub mod telemetry;

@@ -32,8 +32,9 @@ rsi_no_min = 15.0
 mom5_abs = 0.003
 mom15_abs = 0.005
 min_market_yes_price = "0.08"
-max_market_yes_price = "0.55"
-min_secs_to_close = 250
+max_market_yes_price = "0.53"
+min_secs_to_close = 350
+min_liquidity = "8000"
 cluster_tie_min_edge_multiplier = 1.3
 min_momentum_5m_abs = 0.0001
 neutral_taker_edge_multiplier = 1.5
@@ -43,7 +44,7 @@ taker_direction_confirm = false
 yes_confidence_penalty = 0.0
 no_confidence_penalty = 0.0
 expiry_dampen_last_secs = 120
-cheap_token_price_threshold = "0.35"
+cheap_token_price_threshold = "0.42"
 cheap_token_max_usdc = "5"
 large_order_usdc_hard_cap = "25"
 # DOWN cluster: stricter min_confidence; mid YES-price band: higher min_edge; TBR neutral band / alignment thresholds.
@@ -62,8 +63,8 @@ max_std_pct = "0.45"
 sample_bars = 20
 
 [risk]
-max_position_pct = "0.05"
-daily_loss_limit_pct = "0.50"
+max_position_pct = "0.035"
+daily_loss_limit_pct = "0.30"
 initial_balance = "200"
 
 [htf]
@@ -105,6 +106,7 @@ cheap_token_max_usdc = "10"
 [asset.eth]
 min_edge = "0.015"
 min_confidence = "0.72"
+min_secs_to_close = 400
 candle_lookback = 150
 volume_min_ratio = 0.5
 vol_min_std_pct = "0.020"
@@ -124,15 +126,17 @@ taker_no_max_ratio = 0.50
 taker_neutral_low = 0.48
 taker_neutral_high = 0.52
 no_confidence_penalty = 0.10
-cheap_token_max_usdc = "8"
+cheap_token_max_usdc = "5"
 dynamic_momentum_threshold = true
 momentum_vol_reference = 0.03
 
 [asset.sol]
-min_edge = "0.025"
-volume_min_ratio = 0.4
-min_macd_histogram_abs = 0.003
-yes_confidence_penalty = 0.05
+min_edge = "0.035"
+min_confidence = "0.78"
+volume_min_ratio = 0.6
+min_macd_histogram_abs = 0.005
+yes_confidence_penalty = 0.08
+cheap_token_max_usdc = "5"
 rsi_yes_max = 65.0
 htf_enabled = false
 max_secs_to_close = 800
@@ -185,3 +189,16 @@ adaptive_penalty_window = 10
 multi_tf_enabled = true
 multi_tf_interval = "5m"
 multi_tf_lookback = 120
+
+[shadow_calibration]
+enabled = true
+min_trades = 20
+cooldown_secs = 3600
+min_pnl_delta = "10"
+max_step_pct = 0.20
+safety_bound_low = 0.50
+safety_bound_high = 2.0
+rollback_window = 10
+rollback_threshold = 0.30
+bool_toggle_min_trades = 30
+exclude_params = []
