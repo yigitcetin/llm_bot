@@ -134,6 +134,21 @@ pub struct AppConfig {
     /// Number of candles to fetch for the secondary timeframe.
     pub multi_tf_lookback: usize,
 
+    /// Add to `min_confidence` when cluster vote is DOWN (stricter entries).
+    pub cluster_down_confidence_add: f64,
+    /// YES mid in `[low, high]` → multiply effective min edge (e.g. weak mid band).
+    pub mid_price_band_low: Decimal,
+    pub mid_price_band_high: Decimal,
+    /// Multiplier for min edge when YES price is in the mid band (`1.0` = off).
+    pub mid_price_band_min_edge_multiplier: f64,
+    /// Taker alignment: YES requires `taker_buy_ratio` strictly above this.
+    pub taker_yes_min_ratio: f64,
+    /// Taker alignment: NO requires `taker_buy_ratio` strictly below this.
+    pub taker_no_max_ratio: f64,
+    /// When TBR is in this inclusive range, apply `neutral_taker_edge_multiplier`.
+    pub taker_neutral_low: f64,
+    pub taker_neutral_high: f64,
+
     /// Parsed `config.toml` for per-asset TOML fallbacks (environment still wins).
     pub(crate) toml: Option<Arc<TomlRoot>>,
 }
@@ -221,6 +236,15 @@ pub struct AssetStrategy {
     pub multi_tf_enabled: bool,
     pub multi_tf_interval: String,
     pub multi_tf_lookback: usize,
+
+    pub cluster_down_confidence_add: f64,
+    pub mid_price_band_low: Decimal,
+    pub mid_price_band_high: Decimal,
+    pub mid_price_band_min_edge_multiplier: f64,
+    pub taker_yes_min_ratio: f64,
+    pub taker_no_max_ratio: f64,
+    pub taker_neutral_low: f64,
+    pub taker_neutral_high: f64,
 }
 
 impl AssetStrategy {
@@ -409,6 +433,52 @@ impl AssetStrategy {
             anyhow::bail!(
                 "CHEAP_TOKEN_MAX_USDC_* too low: {}",
                 self.cheap_token_max_usdc
+            );
+        }
+        if self.cluster_down_confidence_add < 0.0 || self.cluster_down_confidence_add > 0.30 {
+            anyhow::bail!(
+                "CLUSTER_DOWN_CONFIDENCE_ADD_* must be in [0.0, 0.30], got: {}",
+                self.cluster_down_confidence_add
+            );
+        }
+        if self.mid_price_band_low >= self.mid_price_band_high {
+            anyhow::bail!(
+                "MID_PRICE_BAND_LOW_* ({}) must be < MID_PRICE_BAND_HIGH_* ({})",
+                self.mid_price_band_low,
+                self.mid_price_band_high
+            );
+        }
+        if self.mid_price_band_min_edge_multiplier < 1.0 || self.mid_price_band_min_edge_multiplier > 5.0
+        {
+            anyhow::bail!(
+                "MID_PRICE_BAND_MIN_EDGE_MULTIPLIER_* must be in [1.0, 5.0], got: {}",
+                self.mid_price_band_min_edge_multiplier
+            );
+        }
+        if self.taker_yes_min_ratio <= 0.0 || self.taker_yes_min_ratio >= 1.0 {
+            anyhow::bail!(
+                "TAKER_YES_MIN_RATIO_* must be in (0, 1), got: {}",
+                self.taker_yes_min_ratio
+            );
+        }
+        if self.taker_no_max_ratio <= 0.0 || self.taker_no_max_ratio >= 1.0 {
+            anyhow::bail!(
+                "TAKER_NO_MAX_RATIO_* must be in (0, 1), got: {}",
+                self.taker_no_max_ratio
+            );
+        }
+        if self.taker_neutral_low > self.taker_neutral_high {
+            anyhow::bail!(
+                "TAKER_NEUTRAL_LOW_* ({}) must be <= TAKER_NEUTRAL_HIGH_* ({})",
+                self.taker_neutral_low,
+                self.taker_neutral_high
+            );
+        }
+        if self.taker_no_max_ratio > self.taker_yes_min_ratio {
+            anyhow::bail!(
+                "TAKER_NO_MAX_RATIO_* ({}) must be <= TAKER_YES_MIN_RATIO_* ({}) for coherent YES/NO zones",
+                self.taker_no_max_ratio,
+                self.taker_yes_min_ratio
             );
         }
         self.volatility_filter.validate()?;
@@ -1133,6 +1203,47 @@ impl AppConfig {
                 30,
             ),
 
+            cluster_down_confidence_add: env_toml_f64(
+                "CLUSTER_DOWN_CONFIDENCE_ADD",
+                tc.and_then(|c| c.cluster_down_confidence_add),
+                0.0,
+            ),
+            mid_price_band_low: env_toml_decimal(
+                "MID_PRICE_BAND_LOW",
+                parse_dec_str(&tc.and_then(|c| c.mid_price_band_low.clone())),
+                dec!(0.20),
+            ),
+            mid_price_band_high: env_toml_decimal(
+                "MID_PRICE_BAND_HIGH",
+                parse_dec_str(&tc.and_then(|c| c.mid_price_band_high.clone())),
+                dec!(0.35),
+            ),
+            mid_price_band_min_edge_multiplier: env_toml_f64(
+                "MID_PRICE_BAND_MIN_EDGE_MULTIPLIER",
+                tc.and_then(|c| c.mid_price_band_min_edge_multiplier),
+                1.0,
+            ),
+            taker_yes_min_ratio: env_toml_f64(
+                "TAKER_YES_MIN_RATIO",
+                tc.and_then(|c| c.taker_yes_min_ratio),
+                0.55,
+            ),
+            taker_no_max_ratio: env_toml_f64(
+                "TAKER_NO_MAX_RATIO",
+                tc.and_then(|c| c.taker_no_max_ratio),
+                0.45,
+            ),
+            taker_neutral_low: env_toml_f64(
+                "TAKER_NEUTRAL_LOW",
+                tc.and_then(|c| c.taker_neutral_low),
+                0.45,
+            ),
+            taker_neutral_high: env_toml_f64(
+                "TAKER_NEUTRAL_HIGH",
+                tc.and_then(|c| c.taker_neutral_high),
+                0.55,
+            ),
+
             toml: toml_arc,
         };
 
@@ -1496,6 +1607,62 @@ impl AppConfig {
                 self.multi_tf_lookback,
                 |x| x.multi_tf_lookback,
             ),
+            cluster_down_confidence_add: env_toml_asset_f64(
+                "CLUSTER_DOWN_CONFIDENCE_ADD",
+                &su,
+                a,
+                self.cluster_down_confidence_add,
+                |x| x.cluster_down_confidence_add,
+            ),
+            mid_price_band_low: env_toml_asset_decimal(
+                "MID_PRICE_BAND_LOW",
+                &su,
+                a,
+                self.mid_price_band_low,
+                |x| x.mid_price_band_low.as_ref(),
+            ),
+            mid_price_band_high: env_toml_asset_decimal(
+                "MID_PRICE_BAND_HIGH",
+                &su,
+                a,
+                self.mid_price_band_high,
+                |x| x.mid_price_band_high.as_ref(),
+            ),
+            mid_price_band_min_edge_multiplier: env_toml_asset_f64(
+                "MID_PRICE_BAND_MIN_EDGE_MULTIPLIER",
+                &su,
+                a,
+                self.mid_price_band_min_edge_multiplier,
+                |x| x.mid_price_band_min_edge_multiplier,
+            ),
+            taker_yes_min_ratio: env_toml_asset_f64(
+                "TAKER_YES_MIN_RATIO",
+                &su,
+                a,
+                self.taker_yes_min_ratio,
+                |x| x.taker_yes_min_ratio,
+            ),
+            taker_no_max_ratio: env_toml_asset_f64(
+                "TAKER_NO_MAX_RATIO",
+                &su,
+                a,
+                self.taker_no_max_ratio,
+                |x| x.taker_no_max_ratio,
+            ),
+            taker_neutral_low: env_toml_asset_f64(
+                "TAKER_NEUTRAL_LOW",
+                &su,
+                a,
+                self.taker_neutral_low,
+                |x| x.taker_neutral_low,
+            ),
+            taker_neutral_high: env_toml_asset_f64(
+                "TAKER_NEUTRAL_HIGH",
+                &su,
+                a,
+                self.taker_neutral_high,
+                |x| x.taker_neutral_high,
+            ),
         }
     }
 
@@ -1641,6 +1808,53 @@ impl AppConfig {
             }
         }
 
+        if self.cluster_down_confidence_add < 0.0 || self.cluster_down_confidence_add > 0.30 {
+            anyhow::bail!(
+                "CLUSTER_DOWN_CONFIDENCE_ADD must be in [0.0, 0.30], got: {}",
+                self.cluster_down_confidence_add
+            );
+        }
+        if self.mid_price_band_low >= self.mid_price_band_high {
+            anyhow::bail!(
+                "MID_PRICE_BAND_LOW ({}) must be < MID_PRICE_BAND_HIGH ({})",
+                self.mid_price_band_low,
+                self.mid_price_band_high
+            );
+        }
+        if self.mid_price_band_min_edge_multiplier < 1.0 || self.mid_price_band_min_edge_multiplier > 5.0
+        {
+            anyhow::bail!(
+                "MID_PRICE_BAND_MIN_EDGE_MULTIPLIER must be in [1.0, 5.0], got: {}",
+                self.mid_price_band_min_edge_multiplier
+            );
+        }
+        if self.taker_yes_min_ratio <= 0.0 || self.taker_yes_min_ratio >= 1.0 {
+            anyhow::bail!(
+                "TAKER_YES_MIN_RATIO must be in (0, 1), got: {}",
+                self.taker_yes_min_ratio
+            );
+        }
+        if self.taker_no_max_ratio <= 0.0 || self.taker_no_max_ratio >= 1.0 {
+            anyhow::bail!(
+                "TAKER_NO_MAX_RATIO must be in (0, 1), got: {}",
+                self.taker_no_max_ratio
+            );
+        }
+        if self.taker_neutral_low > self.taker_neutral_high {
+            anyhow::bail!(
+                "TAKER_NEUTRAL_LOW ({}) must be <= TAKER_NEUTRAL_HIGH ({})",
+                self.taker_neutral_low,
+                self.taker_neutral_high
+            );
+        }
+        if self.taker_no_max_ratio > self.taker_yes_min_ratio {
+            anyhow::bail!(
+                "TAKER_NO_MAX_RATIO ({}) must be <= TAKER_YES_MIN_RATIO ({})",
+                self.taker_no_max_ratio,
+                self.taker_yes_min_ratio
+            );
+        }
+
         self.validate_polymarket_auth()?;
 
         Ok(())
@@ -1735,6 +1949,15 @@ impl Default for AppConfig {
             multi_tf_enabled: false,
             multi_tf_interval: "5m".to_string(),
             multi_tf_lookback: 30,
+
+            cluster_down_confidence_add: 0.0,
+            mid_price_band_low: dec!(0.20),
+            mid_price_band_high: dec!(0.35),
+            mid_price_band_min_edge_multiplier: 1.0,
+            taker_yes_min_ratio: 0.55,
+            taker_no_max_ratio: 0.45,
+            taker_neutral_low: 0.45,
+            taker_neutral_high: 0.55,
 
             toml: None,
         }

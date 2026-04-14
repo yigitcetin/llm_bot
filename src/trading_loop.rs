@@ -54,14 +54,22 @@ fn compute_edge_min_for_trade_cluster(
     signal: &TechnicalSignal,
     st: &AssetStrategy,
     eff_min_edge: Decimal,
+    market_yes_price: Decimal,
 ) -> Decimal {
-    let mut edge_min_for_trade = eff_min_edge;
-    if signal.cluster_direction == "TIE" {
-        let mult = Decimal::from_f64(st.cluster_tie_min_edge_multiplier).unwrap_or(dec!(1));
-        edge_min_for_trade = (eff_min_edge * mult).min(dec!(0.50));
+    let mut mult_total = 1.0_f64;
+    if st.mid_price_band_min_edge_multiplier > 1.0
+        && market_yes_price >= st.mid_price_band_low
+        && market_yes_price <= st.mid_price_band_high
+    {
+        mult_total *= st.mid_price_band_min_edge_multiplier;
     }
+    if signal.cluster_direction == "TIE" {
+        mult_total *= st.cluster_tie_min_edge_multiplier;
+    }
+    let mut edge_min_for_trade =
+        (eff_min_edge * Decimal::from_f64(mult_total).unwrap_or(dec!(1))).min(dec!(0.50));
     if let Some(tbr) = signal.taker_buy_ratio {
-        if (0.45..=0.55).contains(&tbr) {
+        if tbr >= st.taker_neutral_low && tbr <= st.taker_neutral_high {
             let mult = Decimal::from_f64(st.neutral_taker_edge_multiplier).unwrap_or(dec!(1));
             edge_min_for_trade = (edge_min_for_trade * mult).min(dec!(0.50));
         }
@@ -92,8 +100,8 @@ fn populate_direction_filter_telemetry(
     if st.taker_direction_confirm {
         if let Some(tbr) = signal.taker_buy_ratio {
             let aligned = match direction {
-                Direction::Yes => tbr > 0.55,
-                Direction::No => tbr < 0.45,
+                Direction::Yes => tbr > st.taker_yes_min_ratio,
+                Direction::No => tbr < st.taker_no_max_ratio,
             };
             record.taker_direction_aligned = Some(aligned);
         }
@@ -127,7 +135,8 @@ fn log_shadow_counterfactual(
         st.adaptive_trade_window,
         st.adaptive_thresholds,
     );
-    let edge_min_for_trade = compute_edge_min_for_trade_cluster(signal, st, eff_min_edge);
+    let edge_min_for_trade =
+        compute_edge_min_for_trade_cluster(signal, st, eff_min_edge, market.yes_price);
 
     let size_usdc = SHADOW_TRADE_USDC;
     let size_shares = (size_usdc / entry_price).round_dp(6);
@@ -310,12 +319,14 @@ pub async fn run_cycle(
     let candle_batches = join_all(filtered.into_iter().map(|(market, st)| async move {
         let need_htf = st.htf_enabled;
         let need_mtf = st.multi_tf_enabled;
+        // `generate_signal` requires MIN_CANDLES_FOR_SIGNAL bars; multi-TF lookback must cover that.
+        let mtf_lookback = st.multi_tf_lookback.max(MIN_CANDLES_FOR_SIGNAL);
         match (need_htf, need_mtf) {
             (true, true) => {
                 let (primary_res, htf_res, mtf_res) = tokio::join!(
                     spot.fetch_candles_at_exchange(&market.asset, &st.candle_interval, st.candle_lookback, &st.spot_exchange),
                     spot.fetch_candles_at_exchange(&market.asset, &st.htf_interval, st.htf_lookback, &st.spot_exchange),
-                    spot.fetch_candles_at_exchange(&market.asset, &st.multi_tf_interval, st.multi_tf_lookback, &st.spot_exchange),
+                    spot.fetch_candles_at_exchange(&market.asset, &st.multi_tf_interval, mtf_lookback, &st.spot_exchange),
                 );
                 (market, st, primary_res, Some(htf_res), Some(mtf_res))
             }
@@ -329,7 +340,7 @@ pub async fn run_cycle(
             (false, true) => {
                 let (primary_res, mtf_res) = tokio::join!(
                     spot.fetch_candles_at_exchange(&market.asset, &st.candle_interval, st.candle_lookback, &st.spot_exchange),
-                    spot.fetch_candles_at_exchange(&market.asset, &st.multi_tf_interval, st.multi_tf_lookback, &st.spot_exchange),
+                    spot.fetch_candles_at_exchange(&market.asset, &st.multi_tf_interval, mtf_lookback, &st.spot_exchange),
                 );
                 (market, st, primary_res, None, Some(mtf_res))
             }
@@ -619,7 +630,7 @@ pub async fn run_cycle(
         }
 
         let trades_path = format!("{}/trades.jsonl", cfg.data_dir);
-        let (eff_min_edge, eff_min_confidence) = adaptive::effective_thresholds(
+        let (eff_min_edge, mut eff_min_confidence) = adaptive::effective_thresholds(
             &trades_path,
             &market.asset,
             st.min_edge,
@@ -627,6 +638,10 @@ pub async fn run_cycle(
             st.adaptive_trade_window,
             st.adaptive_thresholds,
         );
+        if signal.cluster_direction == "DOWN" && st.cluster_down_confidence_add > 0.0 {
+            let add = Decimal::from_f64(st.cluster_down_confidence_add).unwrap_or(Decimal::ZERO);
+            eff_min_confidence = (eff_min_confidence + add).min(dec!(0.99));
+        }
 
         if signal.confidence < eff_min_confidence {
             log_skip_decision(
@@ -733,8 +748,8 @@ pub async fn run_cycle(
         if st.taker_direction_confirm {
             if let Some(tbr) = signal.taker_buy_ratio {
                 let misaligned = match direction {
-                    Direction::Yes => tbr <= 0.55,
-                    Direction::No => tbr >= 0.45,
+                    Direction::Yes => tbr <= st.taker_yes_min_ratio,
+                    Direction::No => tbr >= st.taker_no_max_ratio,
                 };
                 if misaligned {
                     log_skip_decision(
@@ -742,7 +757,8 @@ pub async fn run_cycle(
                         &market,
                         "taker_direction_misaligned",
                         Some(format!(
-                            "taker_buy_ratio={tbr:.6}, direction={direction:?} (YES needs >0.55, NO needs <0.45)"
+                            "taker_buy_ratio={tbr:.6}, direction={direction:?} (YES needs >{}, NO needs <{})",
+                            st.taker_yes_min_ratio, st.taker_no_max_ratio
                         )),
                     );
                     let vol_std_f = volatility_std_pct.and_then(|d| d.to_f64());
@@ -809,17 +825,12 @@ pub async fn run_cycle(
             }
         }
 
-        let mut edge_min_for_trade = eff_min_edge;
-        if signal.cluster_direction == "TIE" {
-            let mult = Decimal::from_f64(st.cluster_tie_min_edge_multiplier).unwrap_or(dec!(1));
-            edge_min_for_trade = (eff_min_edge * mult).min(dec!(0.50));
-        }
-        if let Some(tbr) = signal.taker_buy_ratio {
-            if (0.45..=0.55).contains(&tbr) {
-                let mult = Decimal::from_f64(st.neutral_taker_edge_multiplier).unwrap_or(dec!(1));
-                edge_min_for_trade = (edge_min_for_trade * mult).min(dec!(0.50));
-            }
-        }
+        let edge_min_for_trade = compute_edge_min_for_trade_cluster(
+            &signal,
+            &st,
+            eff_min_edge,
+            market.yes_price,
+        );
 
         let edge_result = edge::calculate(
             signal.probability,
@@ -893,10 +904,7 @@ pub async fn run_cycle(
                         direction,
                         st.slippage_bps,
                     );
-                    // `recalculate_for_direction_unchecked` uses `max(raw_edge, 0)`; negative raw edges
-                    // become 0 here. Accept `>= 0` so forced matcher direction still trades when the
-                    // model edge is negative but the market price skew favors the forced side.
-                    if hyp.edge >= Decimal::ZERO {
+                    if hyp.edge > Decimal::ZERO {
                         trade = hyp;
                         info!(
                             condition_id = %market.condition_id,

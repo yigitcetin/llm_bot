@@ -95,6 +95,15 @@ pub struct ClusterSection {
     pub multi_tf_enabled: Option<bool>,
     pub multi_tf_interval: Option<String>,
     pub multi_tf_lookback: Option<usize>,
+    /// Extra `min_confidence` when cluster vote is DOWN.
+    pub cluster_down_confidence_add: Option<f64>,
+    pub mid_price_band_low: Option<String>,
+    pub mid_price_band_high: Option<String>,
+    pub mid_price_band_min_edge_multiplier: Option<f64>,
+    pub taker_yes_min_ratio: Option<f64>,
+    pub taker_no_max_ratio: Option<f64>,
+    pub taker_neutral_low: Option<f64>,
+    pub taker_neutral_high: Option<f64>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -202,6 +211,14 @@ pub struct AssetOverride {
     pub multi_tf_enabled: Option<bool>,
     pub multi_tf_interval: Option<String>,
     pub multi_tf_lookback: Option<usize>,
+    pub cluster_down_confidence_add: Option<f64>,
+    pub mid_price_band_low: Option<String>,
+    pub mid_price_band_high: Option<String>,
+    pub mid_price_band_min_edge_multiplier: Option<f64>,
+    pub taker_yes_min_ratio: Option<f64>,
+    pub taker_no_max_ratio: Option<f64>,
+    pub taker_neutral_low: Option<f64>,
+    pub taker_neutral_high: Option<f64>,
 }
 
 /// Read and parse `CONFIG_PATH` (default `config.toml`). Missing file → `None`.
