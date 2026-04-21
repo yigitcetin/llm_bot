@@ -91,6 +91,8 @@ pub struct ClusterSection {
     pub yes_confidence_penalty: Option<f64>,
     /// Subtract from confidence before threshold when trading NO (soft veto).
     pub no_confidence_penalty: Option<f64>,
+    /// Relax edge threshold when market_matcher forces direction override (0.50 = 50% of normal).
+    pub direction_override_edge_fraction: Option<f64>,
     pub dynamic_momentum_threshold: Option<bool>,
     pub momentum_vol_reference: Option<f64>,
     pub adaptive_direction_penalty: Option<bool>,
@@ -225,6 +227,7 @@ pub struct AssetOverride {
     pub taker_direction_confirm: Option<bool>,
     pub yes_confidence_penalty: Option<f64>,
     pub no_confidence_penalty: Option<f64>,
+    pub direction_override_edge_fraction: Option<f64>,
     pub dynamic_momentum_threshold: Option<bool>,
     pub momentum_vol_reference: Option<f64>,
     pub adaptive_direction_penalty: Option<bool>,

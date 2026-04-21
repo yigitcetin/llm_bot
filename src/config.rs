@@ -121,6 +121,10 @@ pub struct AppConfig {
     pub yes_confidence_penalty: f64,
     /// Subtract from effective confidence when trading NO (`0` = off).
     pub no_confidence_penalty: f64,
+    /// When market_matcher overrides direction, relax `edge_min_for_trade` by this fraction
+    /// (e.g. 0.50 = accept trades at 50% of the normal min_edge). Shadow data shows 90% WR
+    /// on direction-override trades that were previously skipped.
+    pub direction_override_edge_fraction: f64,
 
     /// Scale `min_momentum_5m_abs` by current vol / reference vol when true.
     pub dynamic_momentum_threshold: bool,
@@ -229,6 +233,8 @@ pub struct AssetStrategy {
     pub taker_direction_confirm: bool,
     pub yes_confidence_penalty: f64,
     pub no_confidence_penalty: f64,
+    /// Relax `edge_min_for_trade` by this fraction when market_matcher overrides direction.
+    pub direction_override_edge_fraction: f64,
     /// Slippage fraction for edge sizing and order worst-price limit.
     pub slippage_bps: Decimal,
     pub max_secs_to_close: Option<i64>,
@@ -412,6 +418,14 @@ impl AssetStrategy {
             anyhow::bail!(
                 "NO_CONFIDENCE_PENALTY_* must be in [0.0, 0.5], got: {}",
                 self.no_confidence_penalty
+            );
+        }
+        if self.direction_override_edge_fraction < 0.0
+            || self.direction_override_edge_fraction > 1.0
+        {
+            anyhow::bail!(
+                "DIRECTION_OVERRIDE_EDGE_FRACTION must be in [0.0, 1.0], got: {}",
+                self.direction_override_edge_fraction
             );
         }
         if self.slippage_bps <= Decimal::ZERO || self.slippage_bps > dec!(0.05) {
@@ -1187,6 +1201,12 @@ impl AppConfig {
                 0.0,
             ),
 
+            direction_override_edge_fraction: env_toml_f64(
+                "DIRECTION_OVERRIDE_EDGE_FRACTION",
+                tc.and_then(|c| c.direction_override_edge_fraction),
+                0.50,
+            ),
+
             dynamic_momentum_threshold: env_toml_bool(
                 "DYNAMIC_MOMENTUM_THRESHOLD",
                 tc.and_then(|c| c.dynamic_momentum_threshold),
@@ -1626,6 +1646,13 @@ impl AppConfig {
                 self.no_confidence_penalty,
                 |x| x.no_confidence_penalty,
             ),
+            direction_override_edge_fraction: env_toml_asset_f64(
+                "DIRECTION_OVERRIDE_EDGE_FRACTION",
+                &su,
+                a,
+                self.direction_override_edge_fraction,
+                |x| x.direction_override_edge_fraction,
+            ),
             slippage_bps: env_toml_asset_decimal("SLIPPAGE_BPS", &su, a, self.slippage_bps, |x| {
                 x.slippage_bps.as_ref()
             }),
@@ -1885,6 +1912,14 @@ impl AppConfig {
                 self.no_confidence_penalty
             );
         }
+        if self.direction_override_edge_fraction < 0.0
+            || self.direction_override_edge_fraction > 1.0
+        {
+            anyhow::bail!(
+                "DIRECTION_OVERRIDE_EDGE_FRACTION must be in [0.0, 1.0], got: {}",
+                self.direction_override_edge_fraction
+            );
+        }
         if self.slippage_bps <= Decimal::ZERO || self.slippage_bps > dec!(0.05) {
             anyhow::bail!(
                 "SLIPPAGE_BPS must be in (0, 0.05], got: {}",
@@ -2036,6 +2071,7 @@ impl Default for AppConfig {
             taker_direction_confirm: false,
             yes_confidence_penalty: 0.0,
             no_confidence_penalty: 0.0,
+            direction_override_edge_fraction: 0.50,
             dynamic_momentum_threshold: false,
             momentum_vol_reference: 0.03,
             adaptive_direction_penalty: false,

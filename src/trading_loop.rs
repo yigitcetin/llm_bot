@@ -897,17 +897,31 @@ pub async fn run_cycle(
         };
 
         if trade.direction != direction {
+            let override_fraction = Decimal::from_f64(st.direction_override_edge_fraction)
+                .unwrap_or(dec!(0.50));
+            let relaxed_edge_min = (edge_min_for_trade * override_fraction).max(Decimal::ZERO);
             match edge::recalculate_for_direction(
                 signal.probability,
                 market.yes_price,
                 direction,
                 st.slippage_bps,
-                edge_min_for_trade,
+                relaxed_edge_min,
             ) {
-                Some(recalc) => trade = recalc,
+                Some(recalc) => {
+                    if recalc.edge < edge_min_for_trade {
+                        info!(
+                            condition_id = %market.condition_id,
+                            question = %market.question,
+                            ?direction,
+                            edge = %recalc.edge,
+                            relaxed_threshold = %relaxed_edge_min,
+                            full_threshold = %edge_min_for_trade,
+                            "accept: direction override with relaxed edge threshold"
+                        );
+                    }
+                    trade = recalc;
+                }
                 None => {
-                    // Forced direction has edge below `min_edge` but may still be positive;
-                    // accept when raw edge for that side is > 0 (see profitability plan / shadow data).
                     let hyp = edge::recalculate_for_direction_unchecked(
                         signal.probability,
                         market.yes_price,
@@ -921,8 +935,8 @@ pub async fn run_cycle(
                             question = %market.question,
                             ?direction,
                             edge = %trade.edge,
-                            threshold = %edge_min_for_trade,
-                            "accept: forced market_matcher direction with positive edge below min_edge"
+                            threshold = %relaxed_edge_min,
+                            "accept: forced market_matcher direction with positive edge below relaxed min_edge"
                         );
                     } else {
                         log_skip_decision(

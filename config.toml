@@ -8,7 +8,7 @@ durations = ["15m"]
 gamma_tag_id = 102127
 min_edge = "0.10"
 min_confidence = "0.72"
-min_order_usdc = "5"
+min_order_usdc = "10"
 slippage_bps = "0.002"
 
 [technical]
@@ -27,15 +27,16 @@ volume_use_closed_candle_only = true
 rsi_oversold = 35.0
 rsi_overbought = 65.0
 # Direction veto: skip BUY YES when RSI above this; skip BUY NO when RSI below this (0 = off).
-rsi_yes_max = 70.0
-rsi_no_min = 15.0
+# Widened: shadow data shows rsi_yes_over_max 81% WR, rsi_no_below_min 100% WR.
+rsi_yes_max = 80.0
+rsi_no_min = 0.0
 mom5_abs = 0.003
 mom15_abs = 0.005
 min_market_yes_price = "0.08"
 max_market_yes_price = "0.53"
 min_secs_to_close = 350
 min_liquidity = "8000"
-cluster_tie_min_edge_multiplier = 1.3
+cluster_tie_min_edge_multiplier = 1.5
 min_momentum_5m_abs = 0.0001
 neutral_taker_edge_multiplier = 1.5
 # Global defaults for direction-quality filters (0 / false = off; per-asset overrides below).
@@ -43,6 +44,9 @@ min_macd_histogram_abs = 0.0
 taker_direction_confirm = false
 yes_confidence_penalty = 0.0
 no_confidence_penalty = 0.0
+# Direction override: when market_matcher forces the opposite side, use a relaxed edge
+# threshold (fraction of normal min_edge). Shadow data shows 90% WR on these trades.
+direction_override_edge_fraction = 0.50
 expiry_dampen_last_secs = 120
 cheap_token_price_threshold = "0.42"
 cheap_token_max_usdc = "5"
@@ -63,7 +67,7 @@ max_std_pct = "0.45"
 sample_bars = 20
 
 [risk]
-max_position_pct = "0.035"
+max_position_pct = "0.05"
 daily_loss_limit_pct = "0.30"
 initial_balance = "200"
 
@@ -88,7 +92,7 @@ signature_type = "GNOSIS_SAFE"
 data_dir = "data"
 
 [asset.btc]
-min_edge = "0.01"
+min_edge = "0.03"
 min_confidence = "0.75"
 candle_lookback = 200
 volume_min_ratio = 0.6
@@ -104,7 +108,7 @@ taker_neutral_high = 0.60
 cheap_token_max_usdc = "10"
 
 [asset.eth]
-min_edge = "0.015"
+min_edge = "0.03"
 min_confidence = "0.72"
 min_secs_to_close = 400
 candle_lookback = 150
@@ -118,14 +122,14 @@ cluster_down_confidence_add = 0.05
 cluster_rsi_oversold = 30.0
 cluster_mom5_abs = 0.0001
 cluster_mom15_abs = 0.002
-cluster_tie_min_edge_multiplier = 1.1
+cluster_tie_min_edge_multiplier = 1.4
 min_momentum_5m_abs = 0.00005
 taker_direction_confirm = false
 taker_yes_min_ratio = 0.50
 taker_no_max_ratio = 0.50
 taker_neutral_low = 0.48
 taker_neutral_high = 0.52
-no_confidence_penalty = 0.10
+no_confidence_penalty = 0.05
 cheap_token_max_usdc = "5"
 dynamic_momentum_threshold = true
 momentum_vol_reference = 0.03
@@ -135,25 +139,26 @@ min_edge = "0.035"
 min_confidence = "0.78"
 volume_min_ratio = 0.6
 min_macd_histogram_abs = 0.005
-yes_confidence_penalty = 0.08
+yes_confidence_penalty = 0.04
 cheap_token_max_usdc = "5"
-rsi_yes_max = 65.0
+rsi_yes_max = 80.0
 htf_enabled = false
 max_secs_to_close = 800
 adaptive_direction_penalty = true
 adaptive_penalty_window = 15
 
 [asset.xrp]
-min_edge = "0.01"
+min_edge = "0.04"
 min_confidence = "0.72"
 volume_min_ratio = 0.4
 vol_min_std_pct = "0.015"
 htf_enabled = false
 max_secs_to_close = 800
-rsi_yes_max = 75.0
-rsi_no_min = 35.0
+rsi_yes_max = 80.0
+rsi_no_min = 20.0
 min_momentum_5m_abs = 0.00005
-yes_confidence_penalty = 0.05
+# XRP YES: 39% WR vs NO 79%. Heavy penalty on YES to reduce bad trades.
+yes_confidence_penalty = 0.18
 cheap_token_max_usdc = "8"
 dynamic_momentum_threshold = true
 momentum_vol_reference = 0.025
@@ -168,18 +173,18 @@ volume_min_ratio = 0.5
 htf_enabled = false
 max_secs_to_close = 800
 min_macd_histogram_abs = 0.005
-cluster_tie_min_edge_multiplier = 2.0
+cluster_tie_min_edge_multiplier = 2.2
 taker_direction_confirm = true
 
 [asset.doge]
-min_edge = "0.01"
+min_edge = "0.03"
 volume_min_ratio = 0.4
 vol_min_std_pct = "0.015"
 htf_enabled = false
 max_secs_to_close = 800
-cluster_tie_min_edge_multiplier = 1.8
+cluster_tie_min_edge_multiplier = 2.0
 taker_direction_confirm = true
-yes_confidence_penalty = 0.10
+yes_confidence_penalty = 0.05
 min_momentum_5m_abs = 0.00005
 dynamic_momentum_threshold = true
 momentum_vol_reference = 0.02

@@ -1264,6 +1264,7 @@ mod tests {
             taker_direction_confirm: false,
             yes_confidence_penalty: 0.0,
             no_confidence_penalty: 0.0,
+            direction_override_edge_fraction: 0.50,
             slippage_bps: dec!(0.002),
             max_secs_to_close: None,
             blocked_direction: None,
