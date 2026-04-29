@@ -208,13 +208,14 @@ impl GammaClient {
 
         let url = format!("{}/events", GAMMA_API_BASE);
 
+        // Note: Do not send `closed=false` together with `end_date_min`/`end_date_max` — Gamma
+        // currently responds with HTTP 500 (internal error). Filter `closed` / `archived` in-process below.
         let r = match self
             .http
             .get(&url)
             .query(&[
                 ("tag_id", self.tag_id.to_string()),
                 ("active", "true".to_string()),
-                ("closed", "false".to_string()),
                 ("archived", "false".to_string()),
                 ("end_date_min", now.to_rfc3339()),
                 ("end_date_max", window_end.to_rfc3339()),

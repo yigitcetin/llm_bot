@@ -70,7 +70,7 @@ sample_bars = 20
 [risk]
 max_position_pct = "0.05"
 daily_loss_limit_pct = "0.30"
-initial_balance = "549"
+initial_balance = "200"
 
 [htf]
 enabled = true
