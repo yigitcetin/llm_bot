@@ -292,6 +292,12 @@ fn passes_pre_candle_filters(
     true
 }
 
+/// Stats returned by a cycle for the inactivity watchdog.
+pub struct CycleStats {
+    pub trades_placed: u32,
+    pub order_size_skips: u32,
+}
+
 /// One full scan-analyze-execute cycle.
 pub async fn run_cycle(
     cfg: &AppConfig,
@@ -303,7 +309,8 @@ pub async fn run_cycle(
     logger: &MetricsLogger,
     order_tracker: &mut OrderTracker,
     shadow_calibrator: Option<&crate::shadow_calibrator::ShadowCalibrator>,
-) -> Result<()> {
+) -> Result<CycleStats> {
+    let mut cycle_stats = CycleStats { trades_placed: 0, order_size_skips: 0 };
     let markets = gamma.active_markets(&cfg.assets, &cfg.durations).await?;
     prometheus_export::add_markets_scanned(markets.len() as u64);
     info!(count = markets.len(), "markets fetched");
@@ -1034,12 +1041,17 @@ pub async fn run_cycle(
         }
 
         let balance = risk.available_balance();
+        // Dynamic floor: max(hard_floor, balance * max_position_pct * 0.80)
+        // Prevents deadlock when balance * max_position_pct < min_order_usdc.
+        let dynamic_min = st.min_order_usdc_floor
+            .max((balance * st.max_position_pct * dec!(0.80)).round_dp(2))
+            .min(st.min_order_usdc);
         let sizing = edge::kelly_size_with_caps_detail(
             trade.edge,
             signal.confidence,
             balance,
             st.max_position_pct,
-            st.min_order_usdc,
+            dynamic_min,
             trade.token_price,
             st.cheap_token_price_threshold,
             st.cheap_token_max_usdc,
@@ -1047,14 +1059,15 @@ pub async fn run_cycle(
         );
         let size_usdc = sizing.size_usdc;
 
-        if size_usdc < st.min_order_usdc {
+        if size_usdc < dynamic_min {
+            cycle_stats.order_size_skips += 1;
             log_skip_decision(
                 logger,
                 &market,
                 "order_size_below_minimum",
                 Some(format!(
-                    "size_usdc={}, min_order_usdc={}",
-                    size_usdc, st.min_order_usdc
+                    "size_usdc={}, dynamic_min={}, min_order_usdc={}, floor={}",
+                    size_usdc, dynamic_min, st.min_order_usdc, st.min_order_usdc_floor
                 )),
             );
             let vol_std_f = volatility_std_pct.and_then(|d| d.to_f64());
@@ -1073,8 +1086,8 @@ pub async fn run_cycle(
                 condition_id = %market.condition_id,
                 question = %market.question,
                 size_usdc = %size_usdc,
-                min_order_usdc = %st.min_order_usdc,
-                "skip: order size below minimum"
+                dynamic_min = %dynamic_min,
+                "skip: order size below dynamic minimum"
             );
             continue;
         }
@@ -1261,8 +1274,10 @@ pub async fn run_cycle(
                         end_date_ms: market.end_date_ms,
                     };
                     risk.record_trade(size_usdc, position);
+                    cycle_stats.trades_placed += 1;
                 } else {
                     risk.reserve_for_order(&market.condition_id, size_usdc);
+                    cycle_stats.trades_placed += 1;
                     order_tracker.add_pending(pending_from_outcome(
                         &outcome,
                         market.condition_id.clone(),
@@ -1294,5 +1309,5 @@ pub async fn run_cycle(
         }
     }
 
-    Ok(())
+    Ok(cycle_stats)
 }

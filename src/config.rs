@@ -25,6 +25,8 @@ pub struct AppConfig {
     pub min_edge: Decimal,       // minimum technical prob vs market price gap
     pub min_confidence: Decimal, // minimum technical confidence score
     pub min_order_usdc: Decimal, // minimum order size in USDC
+    /// Hard floor for dynamic sizing: never trade below this USDC amount regardless of balance.
+    pub min_order_usdc_floor: Decimal,
     /// Slippage fraction added to reference token price (e.g. `0.002` = 0.2%). Also used as CLOB worst-price limit.
     pub slippage_bps: Decimal,
 
@@ -183,6 +185,7 @@ pub struct AssetStrategy {
     pub min_edge: Decimal,
     pub min_confidence: Decimal,
     pub min_order_usdc: Decimal,
+    pub min_order_usdc_floor: Decimal,
     pub spot_exchange: String,
     pub candle_interval: String,
     pub candle_lookback: usize,
@@ -944,6 +947,12 @@ impl AppConfig {
                 dec!(5),
             ),
 
+            min_order_usdc_floor: env_toml_decimal(
+                "MIN_ORDER_USDC_FLOOR",
+                parse_dec_str(&ts.and_then(|s| s.min_order_usdc_floor.clone())),
+                dec!(2),
+            ),
+
             slippage_bps: env_toml_decimal(
                 "SLIPPAGE_BPS",
                 parse_dec_str(&ts.and_then(|s| s.slippage_bps.clone())),
@@ -1393,6 +1402,7 @@ impl AppConfig {
                 self.min_order_usdc,
                 |x| x.min_order_usdc.as_ref(),
             ),
+            min_order_usdc_floor: self.min_order_usdc_floor,
             spot_exchange: env_toml_asset_string(
                 "SPOT_EXCHANGE",
                 &su,
@@ -1831,6 +1841,13 @@ impl AppConfig {
             );
         }
 
+        if self.min_order_usdc_floor < dec!(1) || self.min_order_usdc_floor > self.min_order_usdc {
+            anyhow::bail!(
+                "MIN_ORDER_USDC_FLOOR must be in [1, MIN_ORDER_USDC={}], got: {}",
+                self.min_order_usdc, self.min_order_usdc_floor
+            );
+        }
+
         if self.min_liquidity_usdc <= Decimal::ZERO {
             anyhow::bail!(
                 "MIN_LIQUIDITY_USDC must be positive, got: {}",
@@ -2014,6 +2031,7 @@ impl Default for AppConfig {
             min_edge: dec!(0.06),
             min_confidence: dec!(0.70),
             min_order_usdc: dec!(5),
+            min_order_usdc_floor: dec!(2),
             slippage_bps: SLIPPAGE_BPS,
             spot_exchange: "binance".to_string(),
             candle_interval: "1m".to_string(),

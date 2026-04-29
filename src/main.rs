@@ -2,8 +2,11 @@
 
 use anyhow::Result;
 use reqwest::header::{HeaderMap, ACCEPT, USER_AGENT};
+use rust_decimal::Decimal;
+use rust_decimal_macros::dec;
 use tokio::sync::watch;
 use tracing::info;
+use tracing::warn;
 use tracing::Instrument;
 
 use polymarket_llm_bot::config::AppConfig;
@@ -11,6 +14,8 @@ use polymarket_llm_bot::constants;
 use polymarket_llm_bot::execution;
 use polymarket_llm_bot::fill_tracker::FillTracker;
 use polymarket_llm_bot::gamma;
+use polymarket_llm_bot::inactivity_diagnostics;
+use polymarket_llm_bot::inactivity_watchdog::InactivityWatchdog;
 use polymarket_llm_bot::indicator_cache;
 use polymarket_llm_bot::metrics;
 use polymarket_llm_bot::order_tracker::OrderTracker;
@@ -22,6 +27,31 @@ use polymarket_llm_bot::spot_price;
 use polymarket_llm_bot::telemetry;
 use polymarket_llm_bot::trading_loop::run_cycle;
 use polymarket_llm_bot::user_ws;
+
+/// Dry-run or failed auth: `balance_state.json` / `INITIAL_BALANCE`.
+/// Live CLOB session: CLOB `balance-allowance`; on failure, same fallback as dry-run.
+async fn resolve_starting_balance(cfg: &AppConfig, executor: &execution::Executor) -> Decimal {
+    if executor.is_dry_run() {
+        return risk::persisted_or_config_balance(cfg);
+    }
+
+    match executor.fetch_collateral_balance().await {
+        Ok(b) => {
+            info!(
+                balance = %b,
+                "starting balance from CLOB balance-allowance"
+            );
+            b
+        }
+        Err(e) => {
+            warn!(
+                error = %e,
+                "CLOB balance fetch failed — falling back to balance_state.json / INITIAL_BALANCE"
+            );
+            risk::persisted_or_config_balance(cfg)
+        }
+    }
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -64,7 +94,8 @@ async fn main() -> Result<()> {
     let gamma = gamma::GammaClient::new(http.clone(), cfg.gamma_tag_id);
     let spot = spot_price::SpotPriceClient::new(http.clone(), cfg.spot_exchange.clone());
     let executor = execution::Executor::new(http.clone(), &cfg).await;
-    let mut risk = risk::RiskManager::new(&cfg);
+    let starting_balance = resolve_starting_balance(&cfg, &executor).await;
+    let mut risk = risk::RiskManager::new(&cfg, starting_balance);
     let resolver = resolution_checker::ResolutionChecker::new(http.clone(), &cfg.clob_host);
     let logger = metrics::MetricsLogger::new(&cfg.data_dir)?;
 
@@ -86,6 +117,8 @@ async fn main() -> Result<()> {
         .iter()
         .map(|a| (a.clone(), cfg.asset_strategy(a)))
         .collect();
+
+    let mut watchdog = InactivityWatchdog::new();
 
     info!(
         shadow_calibration = cfg.shadow_calibration.enabled,
@@ -126,8 +159,33 @@ async fn main() -> Result<()> {
         .await;
         prometheus_export::observe_cycle_duration(cycle_start);
 
-        if let Err(e) = cycle_result {
-            tracing::error!(error = %e, "cycle error — sleeping before retry");
+        match &cycle_result {
+            Ok(stats) => {
+                let bal = risk.available_balance();
+                let rep = cfg.asset_strategy(&cfg.assets[0]);
+                let dyn_min = rep.min_order_usdc_floor
+                    .max((bal * rep.max_position_pct * dec!(0.80)).round_dp(2))
+                    .min(rep.min_order_usdc);
+                for _ in 0..stats.order_size_skips {
+                    watchdog.on_order_size_skip(bal, rep.max_position_pct, rep.min_order_usdc, dyn_min);
+                }
+                watchdog.on_cycle_end(stats.trades_placed, &risk);
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "cycle error — sleeping before retry");
+                watchdog.on_cycle_end(0, &risk);
+            }
+        }
+
+        if watchdog.take_report_request() {
+            match inactivity_diagnostics::generate_report(
+                &cfg.data_dir,
+                risk.available_balance(),
+                &base_strategies,
+            ) {
+                Ok(path) => info!(path = %path, "diagnostic report written"),
+                Err(e) => tracing::error!(error = %e, "failed to generate diagnostic report"),
+            }
         }
 
         indicator_cache.cleanup();
@@ -166,7 +224,7 @@ async fn main() -> Result<()> {
 
         // File-based resolution: resolve trades from trades.jsonl whose market close time
         // (parsed from question string) has passed. Covers dry-run mode and bot restarts.
-        match resolver.resolve_unresolved_trades(&logger).await {
+        match resolver.resolve_unresolved_trades(&mut risk, &logger).await {
             Ok(n) if n > 0 => info!(resolved = n, "resolved trades from trades.jsonl"),
             Err(e) => tracing::error!(error = %e, "resolve_unresolved_trades"),
             _ => {}

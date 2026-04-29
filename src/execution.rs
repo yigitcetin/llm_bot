@@ -10,7 +10,7 @@ use polymarket_client_sdk::auth::builder::Builder;
 use polymarket_client_sdk::auth::state::Authenticated;
 use polymarket_client_sdk::auth::{Credentials, Kind, Normal, Signer};
 use polymarket_client_sdk::clob;
-use polymarket_client_sdk::clob::types::request::CancelMarketOrderRequest;
+use polymarket_client_sdk::clob::types::request::{BalanceAllowanceRequest, CancelMarketOrderRequest};
 use polymarket_client_sdk::clob::types::response::PostOrderResponse;
 use polymarket_client_sdk::clob::types::{OrderStatusType, OrderType, Side};
 use polymarket_client_sdk::types::{Address, B256, U256};
@@ -219,6 +219,33 @@ impl Executor {
             dry_run: false,
             ws_auth,
         }
+    }
+
+    /// USDC collateral balance from CLOB `balance-allowance` (Polygon trading account).
+    ///
+    /// Returns an error when [`Self::is_dry_run`] or the authenticated client is unavailable.
+    pub async fn fetch_collateral_balance(&self) -> Result<Decimal> {
+        if self.dry_run {
+            anyhow::bail!("fetch_collateral_balance: dry-run mode has no CLOB session");
+        }
+        let Some(ref client) = self.clob_client else {
+            anyhow::bail!("fetch_collateral_balance: CLOB client not initialized");
+        };
+
+        let resp = match client {
+            AuthenticatedClobClient::Normal(c) => {
+                c.balance_allowance(BalanceAllowanceRequest::default())
+                    .await
+                    .context("CLOB balance_allowance (normal)")?
+            }
+            AuthenticatedClobClient::Builder(c) => {
+                c.balance_allowance(BalanceAllowanceRequest::default())
+                    .await
+                    .context("CLOB balance_allowance (builder)")?
+            }
+        };
+
+        Ok(resp.balance)
     }
 
     /// Place a **GTD** limit buy: rests on the book until fill or market `end_date_ms`.

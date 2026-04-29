@@ -4,6 +4,8 @@
 pub mod config;
 mod config_toml;
 pub mod constants;
+pub mod inactivity_diagnostics;
+pub mod inactivity_watchdog;
 pub mod types;
 pub use config::AssetStrategy;
 pub mod volatility;

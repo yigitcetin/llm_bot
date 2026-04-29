@@ -92,6 +92,45 @@ pub struct CalibratedOverrides {
 }
 
 impl CalibratedOverrides {
+    /// Merge `other` into `self`: only overwrite fields where `other` has `Some`.
+    /// Fields that are `None` in `other` retain their current value in `self`.
+    pub fn merge_from(&mut self, other: &CalibratedOverrides) {
+        macro_rules! merge_opt {
+            ($field:ident) => {
+                if other.$field.is_some() {
+                    self.$field = other.$field;
+                }
+            };
+        }
+        merge_opt!(min_edge);
+        merge_opt!(min_confidence);
+        merge_opt!(yes_confidence_penalty);
+        merge_opt!(no_confidence_penalty);
+        merge_opt!(cluster_down_confidence_add);
+        merge_opt!(min_macd_histogram_abs);
+        merge_opt!(volume_min_ratio);
+        merge_opt!(min_momentum_5m_abs);
+        merge_opt!(momentum_vol_reference);
+        merge_opt!(rsi_yes_max);
+        merge_opt!(rsi_no_min);
+        merge_opt!(cluster_rsi_oversold);
+        merge_opt!(cluster_rsi_overbought);
+        merge_opt!(min_secs_to_close);
+        merge_opt!(max_secs_to_close);
+        merge_opt!(cheap_token_price_threshold);
+        merge_opt!(cluster_tie_min_edge_multiplier);
+        merge_opt!(neutral_taker_edge_multiplier);
+        merge_opt!(mid_price_band_min_edge_multiplier);
+        merge_opt!(taker_yes_min_ratio);
+        merge_opt!(taker_no_max_ratio);
+        merge_opt!(taker_neutral_low);
+        merge_opt!(taker_neutral_high);
+        merge_opt!(taker_direction_confirm);
+        merge_opt!(htf_enabled);
+        merge_opt!(dynamic_momentum_threshold);
+        merge_opt!(multi_tf_enabled);
+    }
+
     pub fn is_empty(&self) -> bool {
         self.min_edge.is_none()
             && self.min_confidence.is_none()
@@ -1046,12 +1085,15 @@ impl ShadowCalibrator {
                 .map(|s| s.applied_overrides.clone())
                 .unwrap_or_default();
 
-            let new_ov = propose_overrides(&stats, &base_snap, &current_ov, &self.config);
+            let delta = propose_overrides(&stats, &base_snap, &current_ov, &self.config);
 
-            if new_ov.is_empty() {
+            if delta.is_empty() {
                 debug!(asset = %asset, "no parameter changes proposed");
                 continue;
             }
+
+            let mut merged_ov = current_ov.clone();
+            merged_ov.merge_from(&delta);
 
             self.state.global_version += 1;
             let version = self.state.global_version;
@@ -1073,7 +1115,7 @@ impl ShadowCalibrator {
                     shadow_pnl: stats.pnl,
                     shadow_trade_count: stats.trade_count,
                     calibration_version: version,
-                    applied_overrides: new_ov,
+                    applied_overrides: merged_ov,
                     base_snapshot: base_snap,
                     trade_count_since_calibration: 0,
                     rolled_back: false,
@@ -1220,6 +1262,7 @@ mod tests {
             min_edge: dec!(0.06),
             min_confidence: dec!(0.70),
             min_order_usdc: dec!(5),
+            min_order_usdc_floor: dec!(2),
             spot_exchange: "binance".to_string(),
             candle_interval: "1m".to_string(),
             candle_lookback: 100,

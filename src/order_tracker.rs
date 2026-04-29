@@ -476,7 +476,7 @@ mod tests {
         let mut tracker = OrderTracker::new(ft.clone());
         let mut cfg = AppConfig::default();
         cfg.polymarket_private_key = "t".to_string();
-        let mut risk = RiskManager::new(&cfg);
+        let mut risk = RiskManager::new_without_persistence(&cfg);
         let bal_before = risk.available_balance();
         let (logger, dir) = test_logger();
 
@@ -496,7 +496,7 @@ mod tests {
         let mut tracker = OrderTracker::new(ft.clone());
         let mut cfg = AppConfig::default();
         cfg.polymarket_private_key = "t".to_string();
-        let mut risk = RiskManager::new(&cfg);
+        let mut risk = RiskManager::new_without_persistence(&cfg);
         let start = risk.available_balance();
         risk.reserve_for_order("0xc1", dec!(10));
         assert_eq!(risk.available_balance(), start - dec!(10));

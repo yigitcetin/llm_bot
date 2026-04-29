@@ -34,6 +34,7 @@ pub struct StrategySection {
     pub min_edge: Option<String>,
     pub min_confidence: Option<String>,
     pub min_order_usdc: Option<String>,
+    pub min_order_usdc_floor: Option<String>,
     /// Fraction added to token price for slippage (e.g. `0.002` = 20 bps). Mirrors env `SLIPPAGE_BPS`.
     pub slippage_bps: Option<String>,
     /// Default block for all assets unless overridden per `[asset.*]` (`YES` or `NO`).

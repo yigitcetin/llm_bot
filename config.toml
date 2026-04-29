@@ -9,6 +9,7 @@ gamma_tag_id = 102127
 min_edge = "0.10"
 min_confidence = "0.72"
 min_order_usdc = "10"
+min_order_usdc_floor = "2"
 slippage_bps = "0.002"
 
 [technical]
@@ -69,7 +70,7 @@ sample_bars = 20
 [risk]
 max_position_pct = "0.05"
 daily_loss_limit_pct = "0.30"
-initial_balance = "200"
+initial_balance = "549"
 
 [htf]
 enabled = true

@@ -111,8 +111,9 @@ impl ResolutionChecker {
     /// Scan `trades.jsonl` for unresolved rows whose market close time (parsed from question)
     /// has passed, then resolve them via the CLOB API and update the file.
     ///
-    /// This is the primary resolution mechanism for dry-run mode and survives bot restarts.
-    pub async fn resolve_unresolved_trades(&self, logger: &MetricsLogger) -> Result<usize> {
+    /// Also credits the `RiskManager` balance (stake + PnL) for each resolved trade so
+    /// persisted balance stays accurate across restarts.
+    pub async fn resolve_unresolved_trades(&self, risk: &mut RiskManager, logger: &MetricsLogger) -> Result<usize> {
         let unresolved = logger.read_unresolved_trades()?;
         if unresolved.is_empty() {
             return Ok(0);
@@ -186,6 +187,13 @@ impl ResolutionChecker {
                     ) {
                         warn!(error = %e, "failed to update trade resolution");
                     } else {
+                        // Credit the balance even if the position isn't in-memory
+                        // (restart scenario: balance was persisted with the deduction).
+                        if risk.has_position(&trade.condition_id) {
+                            risk.record_resolution(&pos, pnl);
+                        } else {
+                            risk.credit_file_resolution(pos.size_usdc, pnl);
+                        }
                         info!(
                             condition_id = %trade.condition_id,
                             yes_won,

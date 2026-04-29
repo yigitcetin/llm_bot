@@ -4,6 +4,12 @@ Polymarket tahmin piyasalarında (ör. BTC/ETH/SOL, 5m/15m) **teknik analiz** ta
 
 İsteğe bağlı **shadow-to-live kalibrasyonu**: çözümlenmiş `shadow_trades.jsonl` verisinden asset bazlı parametre önerileri; runtime’da bellek içi override (`calibration_state.json` ile kalıcılık).
 
+**Bakiye başlangıcı ve kalıcılık:** Canlı CLOB oturumu (`DRY_RUN=false` ve kimlik doğrulama başarılı): başlangıç bakiyesi CLOB **balance-allowance** (USDC) ile alınır; istek başarısızsa veya dry-run / auth düşüşü varsa `data/balance_state.json` veya `initial_balance` kullanılır (`resolve_starting_balance`). Çalışma sırasında bakiye `RiskManager` içinde güncellenir ve `balance_state.json` ile saklanır.
+
+**Dinamik emir tabanı:** Kelly öncesi efektif minimum USDC, `min_order_usdc_floor` ile sabit tabanın üzerinde `balance × max_position_pct × 0.8` ile ölçeklenir; üst sınır `min_order_usdc` (`config.toml`: `min_order_usdc`, `min_order_usdc_floor`).
+
+**İnaktivite tanılama:** Uzun süre trade yoksa veya çok sayıda `order_size_below_minimum` atlama tetiklenince WARN ve isteğe bağlı **`data/inactivity_report_<timestamp>.json`** raporu (skip/shadow/gerçek trade/kalibrasyon özeti; parametre değiştirmez).
+
 ## Dizin yapısı (özet)
 
 ```
@@ -12,19 +18,23 @@ llm_bot/
 ├── config.toml              # Strateji (commitlenebilir örnek)
 ├── env.example              # Secret ve opsiyonel env anahtarları
 ├── README.md
-├── data/                    # Çalışma zamanı JSONL (DATA_DIR, varsayılan: data/)
+├── data/                    # Çalışma zamanı JSONL/JSON (DATA_DIR, varsayılan: data/)
 │   ├── trades.jsonl         # Gerçek / dry-run işlemler (+ çözüm güncellemesi)
 │   ├── shadow_trades.jsonl  # Sinyal sonrası atlanan hayali işlemler (counterfactual)
-│   ├── calibration_state.json  # Shadow kalibrasyon durumu (varsa)
-│   ├── skip_reasons.jsonl     # Erken aşama atlama kayıtları
-│   └── order_failures.jsonl   # Emir yerleştirme hataları
+│   ├── calibration_state.json  # Shadow kalibrasyon durumu (açıksa)
+│   ├── balance_state.json   # RiskManager bakiyesi (otomatik yazılır)
+│   ├── skip_reasons.jsonl     # Atlama telemetrisi (log_skip_decision)
+│   ├── order_failures.jsonl   # Emir yerleştirme hataları (oluşunca)
+│   └── inactivity_report_*.json  # Watchdog tetiklenince tanılama raporu (en fazla 50 dosya tutulur)
 ├── scripts/analysis/        # Python analiz yardımcıları (shadow/trades üzerinde)
 └── src/
-    ├── main.rs              # Binary giriş: döngü, çözüm, shadow kalibrasyon tetikleme
+    ├── main.rs              # Binary: döngü, çözüm, shadow kalibrasyon, inaktivite watchdog
     ├── lib.rs               # Kütüphane modül ağacı
-    ├── trading_loop.rs      # Tarama → sinyal → filtre → emir
+    ├── trading_loop.rs      # Tarama → sinyal → filtre → emir; CycleStats (trade/skip sayıları)
     ├── config.rs / config_toml.rs  # AppConfig, AssetStrategy, TOML şeması
     ├── shadow_calibrator.rs # Shadow istatistik, öneri motoru, rollback
+    ├── inactivity_diagnostics.rs  # Watchdog sonrası JSON tanılama raporu
+    ├── inactivity_watchdog.rs    # Uzun inaktivite / ardışık boyut skip uyarıları
     ├── adaptive.rs          # trades.jsonl tabanlı min_edge / min_confidence ve yön cezası
     ├── metrics.rs           # TradeRecord, JSONL yazma/okuma
     ├── resolution_checker.rs # CLOB ile çözüm; trades + shadow geriye yazma
@@ -35,7 +45,7 @@ llm_bot/
     ├── signal_extensions.rs # Süre / expiry dampening
     ├── edge.rs              # Edge, Kelly boyutlandırma
     ├── market_matcher.rs    # Soru metnine göre yön eşleme
-    ├── risk.rs              # RiskManager
+    ├── risk.rs              # RiskManager, bakiye kalıcılığı
     ├── execution.rs         # CLOB emirleri
     ├── order_tracker.rs     # Bekleyen GTD emirleri, poll
     ├── fill_tracker.rs / user_ws.rs  # Dolgu takibi (canlı)
@@ -64,6 +74,7 @@ flowchart LR
   Res["resolution_checker"]
   Data["data/*.jsonl"]
   Cal["shadow_calibrator\n(isteğe bağlı)"]
+  Inact["inactivity_watchdog +\ntanılama raporu"]
 
   Gamma --> Sig
   Spot --> Sig
@@ -75,9 +86,10 @@ flowchart LR
   Exec --> Data
   Res --> Data
   Data --> Cal
+  Data --> Inact
 ```
 
-Canlı döngü (`trading_loop`) her pazar için: ön filtreler (likidite, fiyat bandı, süre, açık pozisyon) → yeterli mum → önbelleklenmiş teknik sinyal → momentum / MACD / volatilite → HTF → adaptif eşikler ve yön cezası → taker hizası → yön eşleme ve edge → RSI / boyut / risk → dry-run veya gerçek emir. Her döngü sonunda: açık pozisyon çözümü, ardından dosyadan `trades.jsonl` ve `shadow_trades.jsonl` geriye çözüm; `[shadow_calibration] enabled` ise `maybe_recalibrate` çalışır.
+Canlı döngü (`trading_loop`) her pazar için: ön filtreler (likidite, fiyat bandı, süre, açık pozisyon) → yeterli mum → önbelleklenmiş teknik sinyal → momentum / MACD / volatilite → HTF → adaptif eşikler ve yön cezası → taker hizası → yön eşleme ve edge → RSI / boyut / risk → dry-run veya gerçek emir. Döngü sonunda `CycleStats` (yerleştirilen trade sayısı, `order_size_below_minimum` atlama sayısı) ana döngüye döner. Her döngü sonunda: açık pozisyon çözümü, ardından dosyadan `trades.jsonl` ve `shadow_trades.jsonl` geriye çözüm; `[shadow_calibration] enabled` ise `maybe_recalibrate` çalışır. **İnaktivite watchdog:** uzun süre trade yoksa veya çok sayıda boyut tabanı atlama tetiklenince WARN ve bir kez **`inactivity_report_*.json`** tanılama raporu üretilir (`skip_reasons`, shadow, gerçek trade, kalibrasyon özeti; yapılandırma değiştirmez).
 
 ## Modül ve paket tablosu
 
@@ -86,16 +98,18 @@ Canlı döngü (`trading_loop`) her pazar için: ön filtreler (likidite, fiyat 
 | **`polymarket_llm_bot` (lib)** | Strateji, istemciler, analiz; `trading_loop` ana tarama döngüsü |
 | **Binary `polymarket-llm-bot`** | `.env` (secret), `config.toml` (strateji), isteğe bağlı OpenTelemetry / Prometheus, sonsuz döngü |
 | **`config` / `config_toml`** | `AppConfig`, `AssetStrategy`, `TomlRoot`; öncelik: **env > config.toml > kod varsayılanı** |
-| **`trading_loop`** | Pazar listesi → filtre → mum → sinyal → filtre zinciri → emir; shadow counterfactual loglama (sinyal sonrası atlamalar) |
+| **`trading_loop`** | Pazar listesi → filtre → mum → sinyal → filtre zinciri → emir; shadow counterfactual loglama (sinyal sonrası atlamalar); `CycleStats` ile istatistik |
 | **`signals`** | Wilder RSI, MACD, momentum kümesi, spot hacim oranı; `TechnicalSignal` |
 | **`indicator_cache`** | Aynı (asset, interval, mumlar) için sinyal yeniden kullanımı |
 | **`signal_extensions`** | `MIN_SECS_TO_CLOSE`, `MAX_SECS_TO_CLOSE`, `EXPIRY_DAMPEN_LAST_SECS`, süre parse |
 | **`volatility`** | Getiri std üzerinden rejim filtresi (`VolatilityFilterConfig`) |
 | **`edge`** | Piyasa fiyatına karşı edge; Kelly benzeri pozisyon USDC |
 | **`market_matcher`** | Soru metnine göre UP/DOWN piyasasında sinyal yönü |
-| **`risk`** | Günlük kayıp limiti, pazar başına tek açık/rezervasyon |
+| **`risk`** | Günlük kayıp limiti, pazar başına tek açık/rezervasyon; başlangıç bakiyesi canlıda CLOB **balance-allowance**, aksi halde `balance_state.json` / `initial_balance`; süreç içi bakiye dosyaya yazılır |
 | **`adaptive`** | Son çözümlenmiş **gerçek** işlemlerden `min_edge` / `min_confidence` ve isteğe bağlı yön cezası (`trades.jsonl`) |
 | **`shadow_calibrator`** | Çözümlenmiş **shadow** işlemlerden asset bazlı override önerisi; `calibration_state.json`; rollback (kötü canlı WR) |
+| **`inactivity_watchdog`** | Uzun süre trade yok (~4 saat) veya çok sayıda ardışık `order_size_below_minimum` → WARN |
+| **`inactivity_diagnostics`** | Watchdog tetiklenince `data/inactivity_report_<timestamp>.json`: skip/shadow/gerçek trade özeti, saatlik skip, kalibrasyon snapshot, bakiye trendi; **yalnızca bilgi** |
 | **`metrics`** | JSONL: işlemler, shadow, atlama nedenleri, emir hataları; `TradeRecord` şeması |
 | **`resolution_checker`** | CLOB ile market çözümü; `trades.jsonl` / `shadow_trades.jsonl` satır güncelleme |
 | **`gamma` / `spot_price`** | Gamma etkin pazarlar; Binance (vb.) mumlar |
@@ -112,10 +126,12 @@ Canlı döngü (`trading_loop`) her pazar için: ön filtreler (likidite, fiyat 
 | **`trades.jsonl`** | Yerleştirilen işlemler; çözümde `outcome`, `pnl`, `resolved_at`; telemetri alanları; isteğe bağlı `calibration_version` (shadow kalibrasyon sürümü) |
 | **`shadow_trades.jsonl`** | Sinyal üretildikten sonra filtre yüzünden atlanan **hayali** işlemler (sabit notional, `skip_reason`); çözüm ile PnL |
 | **`calibration_state.json`** | Shadow kalibrasyon açıksa: asset başına son kalibrasyon, uygulanan override snapshot, rollback bayrağı |
-| **`skip_reasons.jsonl`** | Mum öncesi / mum-sinyal öncesi atlama nedenleri (`log_skip_decision`) |
+| **`skip_reasons.jsonl`** | Atlama telemetrisi (`log_skip_decision`): likidite, edge, RSI, boyut tabanı vb. |
 | **`order_failures.jsonl`** | `place_order` hataları |
+| **`balance_state.json`** | Son bilinen bakiye ve zaman damgası; her başlangıçta güncel değerle yazılır; CLOB’tan okuma yoksa veya dry-run’da önceki dosya / `INITIAL_BALANCE` kullanılır |
+| **`inactivity_report_*.json`** | İnaktivite uyarısı sonrası tanılama özeti (eski raporlar otomatik budanır, en fazla ~50 dosya) |
 
-## Shadow kalibrasyonu (`[shadow_calibration]`)
+**Not:** Yerel sıfırlama için `data/` içindeki JSONL ve kalıcı JSON dosyalarını silebilirsiniz; dizin boş kalabilir veya `data/.gitkeep` ile yer tutulur; bot ilk yazımında dosyaları yeniden oluşturur.
 
 - **Girdi:** `shadow_trades.jsonl` içindeki çözümlenmiş satırlar (asset bazlı WR, PnL, telemetri dağılımları).
 - **Çıktı:** Bellekte `AssetStrategy` alanlarına uygulanan override’lar; `config.toml` dosyası değişmez.
@@ -176,6 +192,7 @@ Kök `data/shadow_trades.jsonl` ve `trades.jsonl` üzerinde çalışan Python ya
 - **OTLP:** `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME` (ör. Jaeger / collector gRPC 4317)
 - **JSON log:** `LOG_JSON=true`
 - **Prometheus:** `METRICS_ENABLED=true`, `METRICS_BIND=127.0.0.1:9090` — `curl` ile `/metrics`
+- **İnaktivite:** `WARN` seviyesinde watchdog mesajları; tetiklenince `data/inactivity_report_*.json` üretimi için `INFO`/`ERROR` logları
 
 ## CLOB ve SDK
 
@@ -196,7 +213,8 @@ Proje **polymarket-client-sdk** kullanır (`clob`, `gamma`, `ctf`).
 | `GAMMA_TAG_ID` | 102127 | Gamma etkinlik etiketi |
 | `MIN_EDGE` | 0.06 | Min \|teknik olasılık − piyasa\| farkı |
 | `MIN_CONFIDENCE` | 0.70 | Min güven (0.5–1.0) |
-| `MIN_ORDER_USDC` | 5 | Min emir (USDC) |
+| `MIN_ORDER_USDC` | 10 (örnek `config.toml`) | Min emir (USDC); Kelly tabanı için üst sınır |
+| `MIN_ORDER_USDC_FLOOR` | 2 (örnek) | Dinamik tabanın alt sınırı (USDC); bkz. `edge` + `trading_loop` |
 | `MIN_LIQUIDITY_USDC` / `[cluster] min_liquidity` | kod/`config` | Minimum Gamma likiditesi |
 | `SPOT_EXCHANGE` | binance | Spot kaynağı |
 | `CANDLE_INTERVAL` / `CANDLE_LOOKBACK` | 1m / 100 | Mum ayarları |
@@ -205,7 +223,7 @@ Proje **polymarket-client-sdk** kullanır (`clob`, `gamma`, `ctf`).
 | `VOL_*` | — | Getiri std rejim filtresi; ayrıntı `env.example` |
 | `MAX_POSITION_PCT` | 0.05 | İşlem başına bakiye üst sınırı |
 | `DAILY_LOSS_LIMIT_PCT` | 0.10 | Günlük kayıp limiti oranı |
-| `INITIAL_BALANCE` | 200 | Risk hesapları için referans bakiye |
+| `INITIAL_BALANCE` | `config.toml` ile uyumlu | Dry-run veya CLOB bakiye çekilemediğinde fallback; dosya yoksa kullanılır — öncelik sırası: canlıda CLOB → `balance_state.json` → bu değer |
 | `CYCLE_SECS` | 60 | Tarama periyodu (saniye) |
 | `DATA_DIR` | data | JSONL dizini |
 | `HTF_*` | bkz. `env.example` | Üst zaman dilimi trend filtresi |
