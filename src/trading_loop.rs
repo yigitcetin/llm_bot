@@ -720,6 +720,46 @@ pub async fn run_cycle(
         } else {
             (base_dir_penalty, None)
         };
+
+        if st.adaptive_direction_penalty
+            && dir_penalty >= adaptive::ADAPTIVE_DIRECTION_HARD_BLOCK_PENALTY
+        {
+            log_skip_decision(
+                logger,
+                &market,
+                "adaptive_direction_blocked",
+                Some(format!(
+                    "recent {} trades on direction {:?} have 0% WR — adaptive hard block (dir_wr={:?})",
+                    market.asset, direction, adaptive_dir_wr
+                )),
+            );
+            let vol_std_f = volatility_std_pct.and_then(|d| d.to_f64());
+            let hyp = edge::recalculate_for_direction_unchecked(
+                signal.probability,
+                market.yes_price,
+                direction,
+                st.slippage_bps,
+            );
+            log_shadow_counterfactual(
+                cfg,
+                logger,
+                &market,
+                &signal,
+                &st,
+                &hyp,
+                "adaptive_direction_blocked",
+                htf_aligned,
+                vol_std_f,
+            );
+            info!(
+                condition_id = %market.condition_id,
+                ?direction,
+                ?adaptive_dir_wr,
+                "skip: adaptive direction hard block (zero WR in recent window)"
+            );
+            continue;
+        }
+
         if dir_penalty > 0.0 {
             let penalty = Decimal::from_f64(dir_penalty).unwrap_or(Decimal::ZERO);
             let penalized = signal.confidence - penalty;

@@ -172,6 +172,13 @@ pub struct ShadowCalibrationSection {
     pub rollback_threshold: Option<f64>,
     pub bool_toggle_min_trades: Option<usize>,
     pub exclude_params: Option<Vec<String>>,
+    pub live_veto_enabled: Option<bool>,
+    pub live_veto_window: Option<usize>,
+    pub live_veto_min_trades: Option<usize>,
+    pub live_veto_wr_threshold: Option<f64>,
+    pub live_veto_soft_wr: Option<f64>,
+    pub live_veto_pnl_threshold: Option<f64>,
+    pub live_direction_veto_wr: Option<f64>,
 }
 
 /// Fields mirror per-asset env keys (`MIN_EDGE_BTC`, …) without the `_ASSET` suffix.

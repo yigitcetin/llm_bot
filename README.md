@@ -89,7 +89,7 @@ flowchart LR
   Data --> Inact
 ```
 
-Canlı döngü (`trading_loop`) her pazar için: ön filtreler (likidite, fiyat bandı, süre, açık pozisyon) → yeterli mum → önbelleklenmiş teknik sinyal → momentum / MACD / volatilite → HTF → adaptif eşikler ve yön cezası → taker hizası → yön eşleme ve edge → RSI / boyut / risk → dry-run veya gerçek emir. Döngü sonunda `CycleStats` (yerleştirilen trade sayısı, `order_size_below_minimum` atlama sayısı) ana döngüye döner. Her döngü sonunda: açık pozisyon çözümü, ardından dosyadan `trades.jsonl` ve `shadow_trades.jsonl` geriye çözüm; `[shadow_calibration] enabled` ise `maybe_recalibrate` çalışır. **İnaktivite watchdog:** uzun süre trade yoksa veya çok sayıda boyut tabanı atlama tetiklenince WARN ve bir kez **`inactivity_report_*.json`** tanılama raporu üretilir (`skip_reasons`, shadow, gerçek trade, kalibrasyon özeti; yapılandırma değiştirmez).
+Canlı döngü (`trading_loop`) her pazar için: ön filtreler (likidite, fiyat bandı, süre, açık pozisyon) → yeterli mum → önbelleklenmiş teknik sinyal → momentum / MACD / volatilite → HTF → adaptif eşikler ve yön cezası → taker hizası → yön eşleme ve edge → RSI / boyut / risk → dry-run veya gerçek emir. Döngü sonunda `CycleStats` (yerleştirilen trade sayısı, `order_size_below_minimum` atlama sayısı) ana döngüye döner. Her döngü sonunda: açık pozisyon çözümü, ardından dosyadan `trades.jsonl` ve `shadow_trades.jsonl` geriye çözüm; `[shadow_calibration] enabled` ise `maybe_recalibrate` çalışır (shadow önerileri, son gerçek işlemlere göre **live veto** ile gevşetme tarafı filtrelenebilir). **İnaktivite watchdog:** uzun süre trade yoksa veya çok sayıda boyut tabanı atlama tetiklenince WARN ve bir kez **`inactivity_report_*.json`** tanılama raporu üretilir (`skip_reasons`, shadow, gerçek trade, kalibrasyon özeti; yapılandırma değiştirmez).
 
 ## Modül ve paket tablosu
 
@@ -137,7 +137,10 @@ Canlı döngü (`trading_loop`) her pazar için: ön filtreler (likidite, fiyat 
 - **Çıktı:** Bellekte `AssetStrategy` alanlarına uygulanan override’lar; `config.toml` dosyası değişmez.
 - **Kalıcılık:** `calibration_state.json`; süreç yeniden başlasa da dosyadan yüklenir.
 - **Epoch (varsayılan):** en az 20 shadow trade; sonraki güncellemelerde ~1 saat cooldown ve shadow PnL’de ~10 USDC’lik mutlak değişim eşiği; canlı trade’lerde kötü performansta rollback.
-- Ayrıntılı parametreler ve env önekleri: kökteki **`config.toml`** içinde `[shadow_calibration]` ve `SHADOW_CALIBRATION_*` (bkz. `config.rs`).
+- **Live veto:** Son N gerçek işlem (`trades.jsonl`, yapılandırılabilir pencere) için WR ve toplam PnL’ye bakılır; yeterli örneklemde kötü canlı performansta **yalnızca gevşetme** yönlü öneriler düşürülür (sıkılaştırma önerileri korunur). Tamamen shadow’a göre gevşeme ile canlı kayıp çakışırsa uyarı log’u üretilebilir.
+- **Yön (YES/NO):** Canlı YES/NO win rate’e göre, zayıf tarafta `yes_confidence_penalty` / `no_confidence_penalty` **gevşetmesi** önlenir (eşikler `config.toml` / env).
+- **Log:** Kalibrasyon uygulandığında satırda `live_wr`, `live_pnl`, `live_count`, `veto_active`, `overrides_direction` (`tighten` / `loosen` / `mixed` / `none`) yer alır.
+- Ayrıntılı parametreler ve env önekleri: kökteki **`config.toml`** içinde `[shadow_calibration]` ve `SHADOW_CALIBRATION_*` — canlı veto için `SHADOW_CALIBRATION_LIVE_VETO_*` (bkz. `config.rs`).
 
 ## Kurulum
 
@@ -228,7 +231,7 @@ Proje **polymarket-client-sdk** kullanır (`clob`, `gamma`, `ctf`).
 | `DATA_DIR` | data | JSONL dizini |
 | `HTF_*` | bkz. `env.example` | Üst zaman dilimi trend filtresi |
 | `ADAPTIVE_THRESHOLDS` / `ADAPTIVE_TRADE_WINDOW` | false / 50 | Son **gerçek** işlemlere göre eşik ayarı |
-| `SHADOW_CALIBRATION_*` | bkz. `config.toml` | Shadow kalibrasyonu (açıkken) |
+| `SHADOW_CALIBRATION_*` | bkz. `config.toml` | Shadow kalibrasyonu (açıkken); `SHADOW_CALIBRATION_LIVE_VETO_*` canlı veto penceresi / WR–PnL eşikleri |
 
 Tam env anahtar listesi için **`env.example`**; strateji alanları ve per-asset örnekleri için **`config.toml`** dosyasına bakın.
 
@@ -237,7 +240,7 @@ Tam env anahtar listesi için **`env.example`**; strateji alanları ve per-asset
 - Uzun süre `DRY_RUN=true` ile çalıştırıp `skip_reasons.jsonl` ve loglardaki atlama nedenlerini inceleyin.
 - `MIN_EDGE`, `MIN_CONFIDENCE`, mum ve gösterge parametrelerini kendi varlık/süre çiftinize göre ayarlayın.
 - Pazar kapandıktan sonra çözüm gelince `trades.jsonl` satırları güncellenir (`outcome`, `pnl`, `resolved_at`).
-- Shadow tabanlı otomatik parametre güncellemesi için **`[shadow_calibration]`** bölümünü kullanın (yukarıdaki bölüm).
+- Shadow tabanlı otomatik parametre güncellemesi için **`[shadow_calibration]`** bölümünü kullanın (yukarıdaki bölüm); canlı işlem kalitesine bağlı veto ve yön denetimi için aynı bölümdeki `live_veto_*` ve `live_direction_veto_wr` alanlarına bakın.
 
 ## Lisans ve sorumluluk
 

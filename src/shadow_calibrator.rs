@@ -36,6 +36,20 @@ pub struct ShadowCalibrationConfig {
     pub rollback_threshold: f64,
     pub bool_toggle_min_trades: usize,
     pub exclude_params: Vec<String>,
+    /// When true, strip loosening calibration deltas when live trades look poor (see `live_veto_*`).
+    pub live_veto_enabled: bool,
+    /// How many most recent resolved live trades to include per asset.
+    pub live_veto_window: usize,
+    /// Minimum resolved live trades required before live veto can apply.
+    pub live_veto_min_trades: usize,
+    /// Win-rate threshold (exclusive): live WR below this contributes to veto / loosening strip.
+    pub live_veto_wr_threshold: f64,
+    /// Strip loosening proposals when live aggregate WR is below this (e.g. shadow says loosen but live is weak).
+    pub live_veto_soft_wr: f64,
+    /// Sum PnL below this (USDC, typically negative) triggers loosening strip together with min trade count.
+    pub live_veto_pnl_threshold: f64,
+    /// Per-direction live WR below this blocks penalty *decreases* on that side when enough trades exist.
+    pub live_direction_veto_wr: f64,
 }
 
 impl Default for ShadowCalibrationConfig {
@@ -52,6 +66,13 @@ impl Default for ShadowCalibrationConfig {
             rollback_threshold: 0.30,
             bool_toggle_min_trades: 30,
             exclude_params: Vec::new(),
+            live_veto_enabled: true,
+            live_veto_window: 10,
+            live_veto_min_trades: 3,
+            live_veto_wr_threshold: 0.40,
+            live_veto_soft_wr: 0.50,
+            live_veto_pnl_threshold: -10.0,
+            live_direction_veto_wr: 0.30,
         }
     }
 }
@@ -372,6 +393,431 @@ fn trade_won(t: &TradeRecord) -> bool {
     }
 }
 
+fn resolved_time(t: &TradeRecord) -> DateTime<Utc> {
+    t.resolved_at.unwrap_or(t.timestamp)
+}
+
+/// Aggregate live performance for one asset from [`trades.jsonl`] (last `window` resolved trades).
+#[derive(Debug, Clone)]
+pub struct LiveAssetGate {
+    pub wr: f64,
+    pub pnl: f64,
+    pub count: usize,
+}
+
+/// Per-direction live win rates over the same recent window as [`LiveAssetGate`].
+#[derive(Debug, Clone)]
+pub struct LiveDirectionStats {
+    pub yes_wr: f64,
+    pub no_wr: f64,
+    pub yes_count: usize,
+    pub no_count: usize,
+}
+
+/// Win rate and sum PnL for the last `window` resolved live trades on `asset`.
+pub fn compute_live_asset_stats(trades_path: &str, asset: &str, window: usize) -> Option<LiveAssetGate> {
+    let trades = read_trades_from_path(trades_path).ok()?;
+    let mut resolved: Vec<&TradeRecord> = trades
+        .iter()
+        .filter(|t| t.asset == asset && t.outcome.is_some())
+        .collect();
+    if resolved.is_empty() {
+        return Some(LiveAssetGate {
+            wr: 0.0,
+            pnl: 0.0,
+            count: 0,
+        });
+    }
+    resolved.sort_by(|a, b| resolved_time(a).cmp(&resolved_time(b)));
+    let take = window.min(resolved.len());
+    let slice = &resolved[resolved.len() - take..];
+    let wins = slice.iter().filter(|t| trade_won(t)).count();
+    let wr = wins as f64 / slice.len() as f64;
+    let pnl: f64 = slice
+        .iter()
+        .filter_map(|t| t.pnl.as_ref()?.parse::<f64>().ok())
+        .sum();
+    Some(LiveAssetGate {
+        wr,
+        pnl,
+        count: slice.len(),
+    })
+}
+
+/// YES vs NO live win rates for the last `window` resolved trades on `asset`.
+pub fn compute_live_direction_stats(trades_path: &str, asset: &str, window: usize) -> Option<LiveDirectionStats> {
+    let trades = read_trades_from_path(trades_path).ok()?;
+    let mut resolved: Vec<&TradeRecord> = trades
+        .iter()
+        .filter(|t| t.asset == asset && t.outcome.is_some())
+        .collect();
+    if resolved.is_empty() {
+        return Some(LiveDirectionStats {
+            yes_wr: 0.0,
+            no_wr: 0.0,
+            yes_count: 0,
+            no_count: 0,
+        });
+    }
+    resolved.sort_by(|a, b| resolved_time(a).cmp(&resolved_time(b)));
+    let take = window.min(resolved.len());
+    let slice = &resolved[resolved.len() - take..];
+    let yes: Vec<_> = slice.iter().filter(|t| t.direction == "YES").copied().collect();
+    let no: Vec<_> = slice.iter().filter(|t| t.direction == "NO").copied().collect();
+    let yes_wins = yes.iter().filter(|t| trade_won(t)).count();
+    let no_wins = no.iter().filter(|t| trade_won(t)).count();
+    let yes_wr = if yes.is_empty() {
+        0.0
+    } else {
+        yes_wins as f64 / yes.len() as f64
+    };
+    let no_wr = if no.is_empty() {
+        0.0
+    } else {
+        no_wins as f64 / no.len() as f64
+    };
+    Some(LiveDirectionStats {
+        yes_wr,
+        no_wr,
+        yes_count: yes.len(),
+        no_count: no.len(),
+    })
+}
+
+fn live_strip_loosening_trigger(live: &LiveAssetGate, cfg: &ShadowCalibrationConfig) -> bool {
+    if live.count < cfg.live_veto_min_trades {
+        return false;
+    }
+    if live.pnl < cfg.live_veto_pnl_threshold {
+        return true;
+    }
+    live.wr < cfg.live_veto_soft_wr
+}
+
+/// High-severity live stress (for mismatch alarms): poor WR or deep loss with enough samples.
+fn live_metrics_stress(live: &LiveAssetGate, cfg: &ShadowCalibrationConfig) -> bool {
+    live.count >= cfg.live_veto_min_trades
+        && (live.wr < cfg.live_veto_wr_threshold || live.pnl < cfg.live_veto_pnl_threshold)
+}
+
+fn classify_override_direction(
+    delta: &CalibratedOverrides,
+    current: &CalibratedOverrides,
+    base: &BaseSnapshot,
+) -> &'static str {
+    let mut loosen = 0usize;
+    let mut tighten = 0usize;
+    let mut consider = |loosens: bool| {
+        if loosens {
+            loosen += 1;
+        } else {
+            tighten += 1;
+        }
+    };
+
+    let cur_edge = current.min_edge.unwrap_or(base.min_edge);
+    let cur_conf = current.min_confidence.unwrap_or(base.min_confidence);
+    if let Some(v) = delta.min_edge {
+        consider(v < cur_edge - 1e-12);
+    }
+    if let Some(v) = delta.min_confidence {
+        consider(v < cur_conf - 1e-12);
+    }
+    if let Some(v) = delta.yes_confidence_penalty {
+        let cur = current.yes_confidence_penalty.unwrap_or(base.yes_confidence_penalty);
+        consider(v < cur - 1e-12);
+    }
+    if let Some(v) = delta.no_confidence_penalty {
+        let cur = current.no_confidence_penalty.unwrap_or(base.no_confidence_penalty);
+        consider(v < cur - 1e-12);
+    }
+    if let Some(v) = delta.cluster_down_confidence_add {
+        let cur = current.cluster_down_confidence_add.unwrap_or(base.cluster_down_confidence_add);
+        consider(v < cur - 1e-12);
+    }
+    if let Some(v) = delta.min_macd_histogram_abs {
+        let cur = current.min_macd_histogram_abs.unwrap_or(base.min_macd_histogram_abs);
+        consider(v < cur - 1e-12);
+    }
+    if let Some(v) = delta.volume_min_ratio {
+        let cur = current.volume_min_ratio.unwrap_or(base.volume_min_ratio.unwrap_or(0.0));
+        consider(v < cur - 1e-12);
+    }
+    if let Some(v) = delta.min_momentum_5m_abs {
+        let cur = current.min_momentum_5m_abs.unwrap_or(base.min_momentum_5m_abs);
+        consider(v < cur - 1e-12);
+    }
+    if let Some(v) = delta.cluster_tie_min_edge_multiplier {
+        let cur = current.cluster_tie_min_edge_multiplier.unwrap_or(base.cluster_tie_min_edge_multiplier);
+        consider(v < cur - 1e-12);
+    }
+    if let Some(v) = delta.neutral_taker_edge_multiplier {
+        let cur = current.neutral_taker_edge_multiplier.unwrap_or(base.neutral_taker_edge_multiplier);
+        consider(v < cur - 1e-12);
+    }
+    if let Some(v) = delta.mid_price_band_min_edge_multiplier {
+        let cur = current.mid_price_band_min_edge_multiplier.unwrap_or(base.mid_price_band_min_edge_multiplier);
+        consider(v < cur - 1e-12);
+    }
+    if let Some(v) = delta.rsi_yes_max {
+        let cur = current.rsi_yes_max.unwrap_or(base.rsi_yes_max);
+        consider(v > cur + 1e-12);
+    }
+    if let Some(v) = delta.rsi_no_min {
+        let cur = current.rsi_no_min.unwrap_or(base.rsi_no_min);
+        consider(v < cur - 1e-12);
+    }
+    if let Some(v) = delta.cluster_rsi_oversold {
+        let cur = current.cluster_rsi_oversold.unwrap_or(base.cluster_rsi_oversold);
+        consider(v > cur + 1e-12); // raising widens oversold zone = loosening
+    }
+    if let Some(v) = delta.cluster_rsi_overbought {
+        let cur = current.cluster_rsi_overbought.unwrap_or(base.cluster_rsi_overbought);
+        consider(v < cur - 1e-12); // lowering widens overbought zone = loosening
+    }
+    if let Some(v) = delta.momentum_vol_reference {
+        let cur = current.momentum_vol_reference.unwrap_or(base.momentum_vol_reference);
+        consider(v > cur + 1e-12); // denominator: raising lowers effective threshold = loosening
+    }
+    if let Some(v) = delta.taker_yes_min_ratio {
+        let cur = current.taker_yes_min_ratio.unwrap_or(base.taker_yes_min_ratio);
+        consider(v < cur - 1e-12);
+    }
+    if let Some(v) = delta.taker_no_max_ratio {
+        let cur = current.taker_no_max_ratio.unwrap_or(base.taker_no_max_ratio);
+        consider(v > cur + 1e-12);
+    }
+    if let Some(v) = delta.taker_direction_confirm {
+        let cur = current.taker_direction_confirm.unwrap_or(base.taker_direction_confirm);
+        consider(!v && cur);
+    }
+    if let Some(v) = delta.htf_enabled {
+        let cur = current.htf_enabled.unwrap_or(base.htf_enabled);
+        consider(!v && cur);
+    }
+    if let Some(v) = delta.multi_tf_enabled {
+        let cur = current.multi_tf_enabled.unwrap_or(base.multi_tf_enabled);
+        consider(!v && cur);
+    }
+
+    match (loosen, tighten) {
+        (0, 0) => "none",
+        (_, 0) => "loosen",
+        (0, _) => "tighten",
+        _ => "mixed",
+    }
+}
+
+/// Remove loosening-only proposals when live trading is weak; tightening changes are kept.
+fn filter_live_veto_loosening(
+    delta: &mut CalibratedOverrides,
+    current: &CalibratedOverrides,
+    base: &BaseSnapshot,
+    cfg: &ShadowCalibrationConfig,
+    live: Option<&LiveAssetGate>,
+) -> bool {
+    if !cfg.live_veto_enabled {
+        return false;
+    }
+    let Some(l) = live else {
+        return false;
+    };
+    if !live_strip_loosening_trigger(l, cfg) {
+        return false;
+    }
+
+    let mut stripped = false;
+
+    let cur_edge = current.min_edge.unwrap_or(base.min_edge);
+    let cur_conf = current.min_confidence.unwrap_or(base.min_confidence);
+    if let Some(v) = delta.min_edge {
+        if v < cur_edge - 1e-12 {
+            delta.min_edge = None;
+            stripped = true;
+        }
+    }
+    if let Some(v) = delta.min_confidence {
+        if v < cur_conf - 1e-12 {
+            delta.min_confidence = None;
+            stripped = true;
+        }
+    }
+    if let Some(v) = delta.yes_confidence_penalty {
+        let cur = current.yes_confidence_penalty.unwrap_or(base.yes_confidence_penalty);
+        if v < cur - 1e-12 {
+            delta.yes_confidence_penalty = None;
+            stripped = true;
+        }
+    }
+    if let Some(v) = delta.no_confidence_penalty {
+        let cur = current.no_confidence_penalty.unwrap_or(base.no_confidence_penalty);
+        if v < cur - 1e-12 {
+            delta.no_confidence_penalty = None;
+            stripped = true;
+        }
+    }
+    if let Some(v) = delta.cluster_down_confidence_add {
+        let cur = current.cluster_down_confidence_add.unwrap_or(base.cluster_down_confidence_add);
+        if v < cur - 1e-12 {
+            delta.cluster_down_confidence_add = None;
+            stripped = true;
+        }
+    }
+    if let Some(v) = delta.min_macd_histogram_abs {
+        let cur = current.min_macd_histogram_abs.unwrap_or(base.min_macd_histogram_abs);
+        if v < cur - 1e-12 {
+            delta.min_macd_histogram_abs = None;
+            stripped = true;
+        }
+    }
+    if let Some(v) = delta.volume_min_ratio {
+        let cur = current.volume_min_ratio.unwrap_or(base.volume_min_ratio.unwrap_or(0.0));
+        if v < cur - 1e-12 {
+            delta.volume_min_ratio = None;
+            stripped = true;
+        }
+    }
+    if let Some(v) = delta.min_momentum_5m_abs {
+        let cur = current.min_momentum_5m_abs.unwrap_or(base.min_momentum_5m_abs);
+        if v < cur - 1e-12 {
+            delta.min_momentum_5m_abs = None;
+            stripped = true;
+        }
+    }
+    if let Some(v) = delta.momentum_vol_reference {
+        let cur = current.momentum_vol_reference.unwrap_or(base.momentum_vol_reference);
+        // Denominator in vol_std / momentum_vol_reference: raising it lowers effective threshold = loosening.
+        if v > cur + 1e-12 {
+            delta.momentum_vol_reference = None;
+            stripped = true;
+        }
+    }
+    if let Some(v) = delta.cluster_tie_min_edge_multiplier {
+        let cur = current.cluster_tie_min_edge_multiplier.unwrap_or(base.cluster_tie_min_edge_multiplier);
+        if v < cur - 1e-12 {
+            delta.cluster_tie_min_edge_multiplier = None;
+            stripped = true;
+        }
+    }
+    if let Some(v) = delta.neutral_taker_edge_multiplier {
+        let cur = current.neutral_taker_edge_multiplier.unwrap_or(base.neutral_taker_edge_multiplier);
+        if v < cur - 1e-12 {
+            delta.neutral_taker_edge_multiplier = None;
+            stripped = true;
+        }
+    }
+    if let Some(v) = delta.mid_price_band_min_edge_multiplier {
+        let cur = current.mid_price_band_min_edge_multiplier.unwrap_or(base.mid_price_band_min_edge_multiplier);
+        if v < cur - 1e-12 {
+            delta.mid_price_band_min_edge_multiplier = None;
+            stripped = true;
+        }
+    }
+    if let Some(v) = delta.rsi_yes_max {
+        let cur = current.rsi_yes_max.unwrap_or(base.rsi_yes_max);
+        if v > cur + 1e-12 {
+            delta.rsi_yes_max = None;
+            stripped = true;
+        }
+    }
+    if let Some(v) = delta.rsi_no_min {
+        let cur = current.rsi_no_min.unwrap_or(base.rsi_no_min);
+        if v < cur - 1e-12 {
+            delta.rsi_no_min = None;
+            stripped = true;
+        }
+    }
+    if let Some(v) = delta.cluster_rsi_oversold {
+        let cur = current.cluster_rsi_oversold.unwrap_or(base.cluster_rsi_oversold);
+        // Used as `rsi < threshold → UP`: raising widens oversold zone = loosening.
+        if v > cur + 1e-12 {
+            delta.cluster_rsi_oversold = None;
+            stripped = true;
+        }
+    }
+    if let Some(v) = delta.cluster_rsi_overbought {
+        let cur = current.cluster_rsi_overbought.unwrap_or(base.cluster_rsi_overbought);
+        // Used as `rsi > threshold → DOWN`: lowering widens overbought zone = loosening.
+        if v < cur - 1e-12 {
+            delta.cluster_rsi_overbought = None;
+            stripped = true;
+        }
+    }
+    if let Some(v) = delta.cheap_token_price_threshold {
+        let cur = current.cheap_token_price_threshold.unwrap_or(base.cheap_token_price_threshold);
+        if v > cur + 1e-12 {
+            delta.cheap_token_price_threshold = None;
+            stripped = true;
+        }
+    }
+    if let Some(v) = delta.taker_yes_min_ratio {
+        let cur = current.taker_yes_min_ratio.unwrap_or(base.taker_yes_min_ratio);
+        if v < cur - 1e-12 {
+            delta.taker_yes_min_ratio = None;
+            stripped = true;
+        }
+    }
+    if let Some(v) = delta.taker_no_max_ratio {
+        let cur = current.taker_no_max_ratio.unwrap_or(base.taker_no_max_ratio);
+        if v > cur + 1e-12 {
+            delta.taker_no_max_ratio = None;
+            stripped = true;
+        }
+    }
+    if let Some(v) = delta.taker_neutral_low {
+        let cur = current.taker_neutral_low.unwrap_or(base.taker_neutral_low);
+        if v < cur - 1e-12 {
+            delta.taker_neutral_low = None;
+            stripped = true;
+        }
+    }
+    if let Some(v) = delta.taker_neutral_high {
+        let cur = current.taker_neutral_high.unwrap_or(base.taker_neutral_high);
+        if v > cur + 1e-12 {
+            delta.taker_neutral_high = None;
+            stripped = true;
+        }
+    }
+    if let Some(v) = delta.min_secs_to_close {
+        let cur = current.min_secs_to_close.unwrap_or(base.min_secs_to_close.unwrap_or(0));
+        // Lower min_secs = easier / looser (trade sooner).
+        if v < cur {
+            delta.min_secs_to_close = None;
+            stripped = true;
+        }
+    }
+    if let Some(v) = delta.max_secs_to_close {
+        let cur = current.max_secs_to_close.unwrap_or(base.max_secs_to_close.unwrap_or(0));
+        if (v as f64) > (cur as f64) + 1e-12 {
+            delta.max_secs_to_close = None;
+            stripped = true;
+        }
+    }
+    if let Some(v) = delta.taker_direction_confirm {
+        let cur = current.taker_direction_confirm.unwrap_or(base.taker_direction_confirm);
+        if !v && cur {
+            delta.taker_direction_confirm = None;
+            stripped = true;
+        }
+    }
+    if let Some(v) = delta.htf_enabled {
+        let cur = current.htf_enabled.unwrap_or(base.htf_enabled);
+        if !v && cur {
+            delta.htf_enabled = None;
+            stripped = true;
+        }
+    }
+    if let Some(v) = delta.multi_tf_enabled {
+        let cur = current.multi_tf_enabled.unwrap_or(base.multi_tf_enabled);
+        if !v && cur {
+            delta.multi_tf_enabled = None;
+            stripped = true;
+        }
+    }
+
+    stripped
+}
+
 fn compute_percentiles(values: &mut Vec<f64>) -> Option<PercentileSet> {
     if values.is_empty() {
         return None;
@@ -682,11 +1128,37 @@ fn wr_driven_multiplier_nudge(current: f64, wr: f64, base: f64, cfg: &ShadowCali
     Some(safe_propose(current, proposed, base, cfg))
 }
 
+/// Clear penalty *decreases* on a side when live trades show that direction is already failing.
+fn strip_penalty_loosening_for_live_direction(
+    ov: &mut CalibratedOverrides,
+    current: &CalibratedOverrides,
+    base: &BaseSnapshot,
+    cfg: &ShadowCalibrationConfig,
+    live_dir: Option<&LiveDirectionStats>,
+) {
+    let Some(ld) = live_dir else {
+        return;
+    };
+    if let Some(v) = ov.no_confidence_penalty {
+        let cur = current.no_confidence_penalty.unwrap_or(base.no_confidence_penalty);
+        if v < cur - 1e-12 && ld.no_count >= 2 && ld.no_wr < cfg.live_direction_veto_wr {
+            ov.no_confidence_penalty = None;
+        }
+    }
+    if let Some(v) = ov.yes_confidence_penalty {
+        let cur = current.yes_confidence_penalty.unwrap_or(base.yes_confidence_penalty);
+        if v < cur - 1e-12 && ld.yes_count >= 2 && ld.yes_wr < cfg.live_direction_veto_wr {
+            ov.yes_confidence_penalty = None;
+        }
+    }
+}
+
 pub fn propose_overrides(
     stats: &ShadowAssetStats,
     base: &BaseSnapshot,
     current: &CalibratedOverrides,
     cfg: &ShadowCalibrationConfig,
+    live_dir: Option<&LiveDirectionStats>,
 ) -> CalibratedOverrides {
     let excluded = |name: &str| cfg.exclude_params.iter().any(|p| p == name);
     let mut ov = CalibratedOverrides::default();
@@ -895,6 +1367,8 @@ pub fn propose_overrides(
         }
     }
 
+    strip_penalty_loosening_for_live_direction(&mut ov, current, base, cfg, live_dir);
+
     ov
 }
 
@@ -1085,12 +1559,43 @@ impl ShadowCalibrator {
                 .map(|s| s.applied_overrides.clone())
                 .unwrap_or_default();
 
-            let delta = propose_overrides(&stats, &base_snap, &current_ov, &self.config);
+            let live_agg = compute_live_asset_stats(&self.trades_path, asset, self.config.live_veto_window);
+            let live_dir = compute_live_direction_stats(&self.trades_path, asset, self.config.live_veto_window);
+
+            let mut delta = propose_overrides(
+                &stats,
+                &base_snap,
+                &current_ov,
+                &self.config,
+                live_dir.as_ref(),
+            );
+
+            let veto_stripped = filter_live_veto_loosening(
+                &mut delta,
+                &current_ov,
+                &base_snap,
+                &self.config,
+                live_agg.as_ref(),
+            );
+
+            if let Some(ref l) = live_agg {
+                if veto_stripped && live_metrics_stress(l, &self.config) {
+                    warn!(
+                        asset = %asset,
+                        live_wr = format!("{:.2}", l.wr),
+                        live_pnl = format!("{:.2}", l.pnl),
+                        live_count = l.count,
+                        "shadow-live mismatch — live veto stripped loosening calibration proposals"
+                    );
+                }
+            }
 
             if delta.is_empty() {
                 debug!(asset = %asset, "no parameter changes proposed");
                 continue;
             }
+
+            let overrides_direction = classify_override_direction(&delta, &current_ov, &base_snap);
 
             let mut merged_ov = current_ov.clone();
             merged_ov.merge_from(&delta);
@@ -1104,6 +1609,11 @@ impl ShadowCalibrator {
                 shadow_wr = format!("{:.2}", stats.wr),
                 shadow_pnl = format!("{:.2}", stats.pnl),
                 trade_count = stats.trade_count,
+                live_wr = live_agg.as_ref().map(|l| format!("{:.2}", l.wr)).unwrap_or_else(|| "n/a".to_string()),
+                live_pnl = live_agg.as_ref().map(|l| format!("{:.2}", l.pnl)).unwrap_or_else(|| "n/a".to_string()),
+                live_count = live_agg.as_ref().map(|l| l.count).unwrap_or(0),
+                veto_active = veto_stripped,
+                overrides_direction = overrides_direction,
                 "applying shadow calibration"
             );
 
@@ -1327,5 +1837,270 @@ mod tests {
             taker_neutral_low: 0.45,
             taker_neutral_high: 0.55,
         }
+    }
+
+    #[test]
+    fn compute_live_asset_stats_basic() {
+        use chrono::{Duration, Utc};
+        use std::io::Write;
+
+        let dir = std::env::temp_dir().join(format!("live_gate_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("trades.jsonl");
+        let mut f = std::fs::File::create(&path).unwrap();
+        let base_time = Utc::now();
+        for i in 0..4 {
+            let mut t = TradeRecord::new(
+                format!("c{}", i),
+                "btc".to_string(),
+                "15m".to_string(),
+                Direction::Yes,
+                dec!(0.5),
+                dec!(5),
+                dec!(10),
+                dec!(0.6),
+                dec!(0.8),
+                dec!(0.1),
+                "test".to_string(),
+                format!("o{}", i),
+            );
+            t.outcome = Some(true);
+            t.pnl = Some("2".into());
+            t.resolved_at = Some(base_time + Duration::seconds(i));
+            writeln!(f, "{}", serde_json::to_string(&t).unwrap()).unwrap();
+        }
+        for i in 0..6 {
+            let mut t = TradeRecord::new(
+                format!("c{}", i + 100),
+                "btc".to_string(),
+                "15m".to_string(),
+                Direction::Yes,
+                dec!(0.5),
+                dec!(5),
+                dec!(10),
+                dec!(0.6),
+                dec!(0.8),
+                dec!(0.1),
+                "test".to_string(),
+                format!("ox{}", i),
+            );
+            t.outcome = Some(false);
+            t.pnl = Some("-3".into());
+            t.resolved_at = Some(base_time + Duration::seconds(20 + i));
+            writeln!(f, "{}", serde_json::to_string(&t).unwrap()).unwrap();
+        }
+
+        let g = compute_live_asset_stats(path.to_str().unwrap(), "btc", 10).unwrap();
+        assert_eq!(g.count, 10);
+        assert!((g.wr - 0.4).abs() < 1e-9);
+        let expected_pnl = 4.0 * 2.0 + 6.0 * (-3.0);
+        assert!((g.pnl - expected_pnl).abs() < 1e-9);
+    }
+
+    #[test]
+    fn compute_live_direction_stats_yes_no() {
+        use chrono::{Duration, Utc};
+        use std::io::Write;
+
+        let dir = std::env::temp_dir().join(format!("live_dir_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("trades.jsonl");
+        let mut f = std::fs::File::create(&path).unwrap();
+        let base_time = Utc::now();
+        let mut ts = 0i64;
+        for _ in 0..3 {
+            let mut t = TradeRecord::new(
+                format!("cy{}", ts),
+                "eth".to_string(),
+                "15m".to_string(),
+                Direction::Yes,
+                dec!(0.5),
+                dec!(5),
+                dec!(10),
+                dec!(0.6),
+                dec!(0.8),
+                dec!(0.1),
+                "test".to_string(),
+                format!("oy{}", ts),
+            );
+            t.outcome = Some(true);
+            t.resolved_at = Some(base_time + Duration::seconds(ts));
+            writeln!(f, "{}", serde_json::to_string(&t).unwrap()).unwrap();
+            ts += 1;
+        }
+        let mut t = TradeRecord::new(
+            format!("cy{}", ts),
+            "eth".to_string(),
+            "15m".to_string(),
+            Direction::Yes,
+            dec!(0.5),
+            dec!(5),
+            dec!(10),
+            dec!(0.6),
+            dec!(0.8),
+            dec!(0.1),
+            "test".to_string(),
+            format!("oy{}", ts),
+        );
+        t.outcome = Some(false);
+        t.resolved_at = Some(base_time + Duration::seconds(ts));
+        writeln!(f, "{}", serde_json::to_string(&t).unwrap()).unwrap();
+        ts += 1;
+
+        for _ in 0..2 {
+            let mut t = TradeRecord::new(
+                format!("cn{}", ts),
+                "eth".to_string(),
+                "15m".to_string(),
+                Direction::No,
+                dec!(0.5),
+                dec!(5),
+                dec!(10),
+                dec!(0.6),
+                dec!(0.8),
+                dec!(0.1),
+                "test".to_string(),
+                format!("on{}", ts),
+            );
+            t.outcome = Some(false);
+            t.resolved_at = Some(base_time + Duration::seconds(ts));
+            writeln!(f, "{}", serde_json::to_string(&t).unwrap()).unwrap();
+            ts += 1;
+        }
+        for _ in 0..2 {
+            let mut t = TradeRecord::new(
+                format!("cn{}", ts),
+                "eth".to_string(),
+                "15m".to_string(),
+                Direction::No,
+                dec!(0.5),
+                dec!(5),
+                dec!(10),
+                dec!(0.6),
+                dec!(0.8),
+                dec!(0.1),
+                "test".to_string(),
+                format!("on{}", ts),
+            );
+            t.outcome = Some(true);
+            t.resolved_at = Some(base_time + Duration::seconds(ts));
+            writeln!(f, "{}", serde_json::to_string(&t).unwrap()).unwrap();
+            ts += 1;
+        }
+
+        let d = compute_live_direction_stats(path.to_str().unwrap(), "eth", 10).unwrap();
+        assert_eq!(d.yes_count, 4);
+        assert_eq!(d.no_count, 4);
+        assert!((d.yes_wr - 0.75).abs() < 1e-9);
+        assert!((d.no_wr - 0.50).abs() < 1e-9);
+    }
+
+    #[test]
+    fn live_veto_strips_loosening_min_edge() {
+        let cfg = ShadowCalibrationConfig::default();
+        let live = LiveAssetGate {
+            wr: 0.35,
+            pnl: -5.0,
+            count: 5,
+        };
+        let base = BaseSnapshot::from_strategy(&default_test_strategy());
+        let current = CalibratedOverrides::default();
+        let mut delta = CalibratedOverrides {
+            min_edge: Some(0.05),
+            ..Default::default()
+        };
+        assert!(filter_live_veto_loosening(
+            &mut delta,
+            &current,
+            &base,
+            &cfg,
+            Some(&live)
+        ));
+        assert!(delta.min_edge.is_none());
+    }
+
+    #[test]
+    fn live_veto_keeps_tightening_min_edge() {
+        let cfg = ShadowCalibrationConfig::default();
+        let live = LiveAssetGate {
+            wr: 0.35,
+            pnl: -5.0,
+            count: 5,
+        };
+        let base = BaseSnapshot::from_strategy(&default_test_strategy());
+        let current = CalibratedOverrides::default();
+        let mut delta = CalibratedOverrides {
+            min_edge: Some(0.08),
+            ..Default::default()
+        };
+        let cleared = filter_live_veto_loosening(
+            &mut delta,
+            &current,
+            &base,
+            &cfg,
+            Some(&live)
+        );
+        assert!(!cleared, "tightening proposals should not be stripped");
+        assert_eq!(delta.min_edge, Some(0.08));
+    }
+
+    #[test]
+    fn strip_penalty_loosening_for_live_direction_clears_bad_yes_live() {
+        let cfg = ShadowCalibrationConfig::default();
+        let base = BaseSnapshot::from_strategy(&default_test_strategy());
+        let current = CalibratedOverrides {
+            yes_confidence_penalty: Some(0.10),
+            ..Default::default()
+        };
+        let mut ov = CalibratedOverrides {
+            yes_confidence_penalty: Some(0.02),
+            ..Default::default()
+        };
+        let live = LiveDirectionStats {
+            yes_wr: 0.2,
+            no_wr: 0.6,
+            yes_count: 4,
+            no_count: 3,
+        };
+        strip_penalty_loosening_for_live_direction(&mut ov, &current, &base, &cfg, Some(&live));
+        assert!(ov.yes_confidence_penalty.is_none());
+    }
+
+    #[test]
+    fn strip_penalty_loosening_keeps_when_live_direction_ok() {
+        let cfg = ShadowCalibrationConfig::default();
+        let base = BaseSnapshot::from_strategy(&default_test_strategy());
+        let current = CalibratedOverrides {
+            yes_confidence_penalty: Some(0.10),
+            ..Default::default()
+        };
+        let mut ov = CalibratedOverrides {
+            yes_confidence_penalty: Some(0.02),
+            ..Default::default()
+        };
+        let live = LiveDirectionStats {
+            yes_wr: 0.55,
+            no_wr: 0.5,
+            yes_count: 4,
+            no_count: 3,
+        };
+        strip_penalty_loosening_for_live_direction(&mut ov, &current, &base, &cfg, Some(&live));
+        assert_eq!(ov.yes_confidence_penalty, Some(0.02));
+    }
+
+    #[test]
+    fn classify_override_direction_loosen_vs_tighten() {
+        let base = BaseSnapshot::from_strategy(&default_test_strategy());
+        let cur = CalibratedOverrides::default();
+        let loosen = CalibratedOverrides {
+            min_edge: Some(0.05),
+            ..Default::default()
+        };
+        assert_eq!(classify_override_direction(&loosen, &cur, &base), "loosen");
+        let tighten = CalibratedOverrides {
+            min_edge: Some(0.08),
+            ..Default::default()
+        };
+        assert_eq!(classify_override_direction(&tighten, &cur, &base), "tighten");
     }
 }

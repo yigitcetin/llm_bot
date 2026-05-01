@@ -101,6 +101,7 @@ pub struct RealTradePerformance {
     pub wr: f64,
     pub pnl: f64,
     pub per_asset: Vec<RealTradeAssetSummary>,
+    pub per_asset_direction: Vec<RealTradeDirectionSummary>,
     pub last_trade_at: Option<DateTime<Utc>>,
     pub hours_since_last_trade: Option<f64>,
 }
@@ -111,6 +112,16 @@ pub struct RealTradeAssetSummary {
     pub count: usize,
     pub wr: f64,
     pub pnl: f64,
+}
+
+/// YES vs NO win rates per asset (resolved trades in lookback window).
+#[derive(Debug, Clone, Serialize)]
+pub struct RealTradeDirectionSummary {
+    pub asset: String,
+    pub yes_count: usize,
+    pub yes_wr: f64,
+    pub no_count: usize,
+    pub no_wr: f64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -155,9 +166,47 @@ pub struct BalancePoint {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Recommendation {
+    /// When set, the recommendation targets this asset (global advice uses `None`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub asset: Option<String>,
     pub priority: &'static str,
     pub category: &'static str,
     pub message: String,
+}
+
+/// One-line summary of recommendation rows for operator logs (paired with [`generate_report`]).
+pub fn format_recommendations_log_summary(recs: &[Recommendation]) -> String {
+    use std::collections::HashMap;
+
+    if recs.is_empty() {
+        return "recs=0".to_string();
+    }
+
+    let mut pri: HashMap<&str, usize> = HashMap::new();
+    for r in recs {
+        *pri.entry(r.priority).or_insert(0) += 1;
+    }
+    let pri_part = pri
+        .into_iter()
+        .map(|(k, v)| format!("{}:{}", k, v))
+        .collect::<Vec<_>>()
+        .join(",");
+
+    let mut assets: Vec<&str> = recs.iter().filter_map(|r| r.asset.as_deref()).collect();
+    assets.sort_unstable();
+    assets.dedup();
+    let asset_part = if assets.is_empty() {
+        "-".to_string()
+    } else {
+        assets.join(",")
+    };
+
+    format!(
+        "recs={} priority{{{}}} assets{{{}}}",
+        recs.len(),
+        pri_part,
+        asset_part
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -168,11 +217,25 @@ const LOOKBACK_HOURS: u64 = 4;
 const TRADE_LOOKBACK_HOURS: u64 = 24;
 const MAX_REPORTS: usize = 50;
 
+/// Minimum resolved trades per asset to warn about weak recent performance.
+const ASSET_PERF_MIN_TRADES: usize = 3;
+/// Win-rate fraction below which we flag an asset (recent real trades).
+const ASSET_PERF_MAX_WR: f64 = 0.45;
+const ASSET_SHADOW_MIN_COUNT: usize = 5;
+const ASSET_SHADOW_MIN_PNL: f64 = 20.0;
+const ASSET_SHADOW_MIN_WR: f64 = 0.65;
+/// Minimum trades on each side (YES and NO) to compare direction imbalance.
+const DIR_MIN_EACH_SIDE: usize = 2;
+/// Absolute YES−NO WR gap (fraction) to flag direction imbalance.
+const DIR_WR_GAP: f64 = 0.25;
+/// Minimum count of non-null calibration overrides to emit drift INFO for an asset.
+const CAL_DRIFT_MIN_PARAMS: usize = 10;
+
 pub fn generate_report(
     data_dir: &str,
     available_balance: Decimal,
     strategies: &HashMap<String, AssetStrategy>,
-) -> Result<String> {
+) -> Result<(String, String)> {
     let cutoff = Utc::now() - Duration::hours(LOOKBACK_HOURS as i64);
     let trade_cutoff = Utc::now() - Duration::hours(TRADE_LOOKBACK_HOURS as i64);
 
@@ -189,7 +252,9 @@ pub fn generate_report(
         &shadow_analysis,
         &real_trade_performance,
         &balance_trend,
+        &calibration_status,
     );
+    let log_summary = format_recommendations_log_summary(&recommendations);
 
     let report = InactivityReport {
         generated_at: Utc::now(),
@@ -220,7 +285,7 @@ pub fn generate_report(
 
     info!(path = %path, "inactivity diagnostic report generated");
 
-    Ok(path)
+    Ok((path, log_summary))
 }
 
 // ---------------------------------------------------------------------------
@@ -433,6 +498,49 @@ fn analyze_real_trades(data_dir: &str, cutoff: DateTime<Utc>) -> Result<RealTrad
         .collect();
     per_asset.sort_by(|a, b| b.pnl.partial_cmp(&a.pnl).unwrap_or(std::cmp::Ordering::Equal));
 
+    let mut yes_stats: HashMap<String, (usize, usize)> = HashMap::new();
+    let mut no_stats: HashMap<String, (usize, usize)> = HashMap::new();
+    for t in &resolved {
+        match t.direction.as_str() {
+            "YES" => {
+                let e = yes_stats.entry(t.asset.clone()).or_insert((0, 0));
+                e.0 += 1;
+                if trade_won(t) {
+                    e.1 += 1;
+                }
+            }
+            "NO" => {
+                let e = no_stats.entry(t.asset.clone()).or_insert((0, 0));
+                e.0 += 1;
+                if trade_won(t) {
+                    e.1 += 1;
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut asset_keys: Vec<String> = yes_stats.keys().cloned().collect();
+    for k in no_stats.keys() {
+        if !asset_keys.contains(k) {
+            asset_keys.push(k.clone());
+        }
+    }
+    asset_keys.sort();
+    let per_asset_direction: Vec<RealTradeDirectionSummary> = asset_keys
+        .into_iter()
+        .map(|asset| {
+            let (yt, yw) = yes_stats.get(&asset).copied().unwrap_or((0, 0));
+            let (nt, nw) = no_stats.get(&asset).copied().unwrap_or((0, 0));
+            RealTradeDirectionSummary {
+                asset,
+                yes_count: yt,
+                yes_wr: if yt == 0 { 0.0 } else { yw as f64 / yt as f64 },
+                no_count: nt,
+                no_wr: if nt == 0 { 0.0 } else { nw as f64 / nt as f64 },
+            }
+        })
+        .collect();
+
     Ok(RealTradePerformance {
         lookback_hours: TRADE_LOOKBACK_HOURS,
         total_trades: total,
@@ -441,6 +549,7 @@ fn analyze_real_trades(data_dir: &str, cutoff: DateTime<Utc>) -> Result<RealTrad
         wr,
         pnl,
         per_asset,
+        per_asset_direction,
         last_trade_at,
         hours_since_last_trade: hours_since,
     })
@@ -646,12 +755,14 @@ fn build_recommendations(
     shadows: &ShadowAnalysis,
     real_trades: &RealTradePerformance,
     balance_trend: &BalanceTrend,
+    calibration: &CalibrationSummary,
 ) -> Vec<Recommendation> {
     let mut recs = Vec::new();
 
     // --- CRITICAL: balance deadlock ---
     if balance.deadlock_detected {
         recs.push(Recommendation {
+            asset: None,
             priority: "CRITICAL",
             category: "balance",
             message: format!(
@@ -669,6 +780,7 @@ fn build_recommendations(
 
         if pct > 50.0 {
             recs.push(Recommendation {
+                asset: None,
                 priority: "HIGH",
                 category: "skip_filter",
                 message: format!(
@@ -682,9 +794,14 @@ fn build_recommendations(
 
     // --- HIGH: sizing deadlock ---
     if skips.total_skips > 0 {
-        if let Some(rc) = skips.reason_distribution.iter().find(|r| r.reason == "order_size_below_minimum") {
+        if let Some(rc) = skips
+            .reason_distribution
+            .iter()
+            .find(|r| r.reason == "order_size_below_minimum")
+        {
             if rc.pct > 30.0 {
                 recs.push(Recommendation {
+                    asset: None,
                     priority: "HIGH",
                     category: "sizing",
                     message: format!(
@@ -700,12 +817,14 @@ fn build_recommendations(
     // --- HIGH: significant drawdown ---
     if balance_trend.current_drawdown_pct > 15.0 {
         recs.push(Recommendation {
+            asset: None,
             priority: "HIGH",
             category: "drawdown",
             message: format!(
                 "Balance drawdown is {:.1}% from peak ({:.2} → current {}). \
                  Consider pausing or reducing position sizes.",
-                balance_trend.current_drawdown_pct, balance_trend.peak_balance,
+                balance_trend.current_drawdown_pct,
+                balance_trend.peak_balance,
                 balance.available_balance
             ),
         });
@@ -715,12 +834,14 @@ fn build_recommendations(
     if let Some(hours) = real_trades.hours_since_last_trade {
         if hours > 12.0 {
             recs.push(Recommendation {
+                asset: None,
                 priority: "HIGH",
                 category: "inactivity",
                 message: format!(
                     "No trades placed for {:.1} hours. Last trade: {}.",
                     hours,
-                    real_trades.last_trade_at
+                    real_trades
+                        .last_trade_at
                         .map(|t| t.format("%Y-%m-%d %H:%M UTC").to_string())
                         .unwrap_or_else(|| "never".to_string())
                 ),
@@ -728,44 +849,138 @@ fn build_recommendations(
         }
     }
 
-    // --- MEDIUM: shadow opportunity per reason ---
-    for reason_stat in &shadows.per_skip_reason {
-        if reason_stat.count >= 5 && reason_stat.wr >= 0.70 && reason_stat.pnl > 0.0 {
+    // --- INFO: calibration drift (per asset) ---
+    if calibration.loaded {
+        for ca in &calibration.per_asset {
+            if ca.drift_params >= CAL_DRIFT_MIN_PARAMS {
+                recs.push(Recommendation {
+                    asset: Some(ca.asset.clone()),
+                    priority: "INFO",
+                    category: "calibration_drift",
+                    message: format!(
+                        "{}: {} calibrated parameter overrides active (shadow calibration). \
+                         Review overrides vs base config if behaviour diverges from expectations.",
+                        ca.asset, ca.drift_params
+                    ),
+                });
+            }
+        }
+    }
+
+    // --- MEDIUM: weak recent real performance (per asset) ---
+    for a in &real_trades.per_asset {
+        if a.count >= ASSET_PERF_MIN_TRADES && a.wr < ASSET_PERF_MAX_WR {
             recs.push(Recommendation {
+                asset: Some(a.asset.clone()),
                 priority: "MEDIUM",
-                category: "shadow_opportunity",
+                category: "asset_performance",
                 message: format!(
-                    "Shadow trades with skip_reason='{}': {} trades, {:.0}% WR, {:.2} USDC PnL. \
-                     This filter may be blocking profitable opportunities.",
-                    reason_stat.reason, reason_stat.count,
-                    reason_stat.wr * 100.0, reason_stat.pnl
+                    "{}: recent real-trade WR {:.0}% over {} trades ({:.2} USDC PnL). \
+                     Consider tightening filters or pausing this asset.",
+                    a.asset,
+                    a.wr * 100.0,
+                    a.count,
+                    a.pnl
                 ),
             });
         }
     }
 
-    // --- MEDIUM: overall shadow performance ---
+    // --- MEDIUM: shadow opportunity (per asset) ---
+    for s in &shadows.per_asset {
+        if s.count >= ASSET_SHADOW_MIN_COUNT
+            && s.wr >= ASSET_SHADOW_MIN_WR
+            && s.pnl > ASSET_SHADOW_MIN_PNL
+        {
+            recs.push(Recommendation {
+                asset: Some(s.asset.clone()),
+                priority: "MEDIUM",
+                category: "asset_shadow_opportunity",
+                message: format!(
+                    "{}: shadow counterfactuals — {} resolved, {:.0}% WR, {:.2} USDC PnL. \
+                     Filters may be blocking profitable setups on this asset.",
+                    s.asset,
+                    s.count,
+                    s.wr * 100.0,
+                    s.pnl
+                ),
+            });
+        }
+    }
+
+    // --- MEDIUM: YES vs NO imbalance (per asset) ---
+    for d in &real_trades.per_asset_direction {
+        if d.yes_count >= DIR_MIN_EACH_SIDE && d.no_count >= DIR_MIN_EACH_SIDE {
+            let gap = (d.yes_wr - d.no_wr).abs();
+            if gap > DIR_WR_GAP {
+                let weaker = if d.yes_wr < d.no_wr { "YES" } else { "NO" };
+                recs.push(Recommendation {
+                    asset: Some(d.asset.clone()),
+                    priority: "MEDIUM",
+                    category: "direction_imbalance",
+                    message: format!(
+                        "{}: YES {:.0}% WR (n={}) vs NO {:.0}% WR (n={}) — gap {:.0} pp. \
+                         Weaker side recently: {}. Review direction penalties or `blocked_direction`.",
+                        d.asset,
+                        d.yes_wr * 100.0,
+                        d.yes_count,
+                        d.no_wr * 100.0,
+                        d.no_count,
+                        gap * 100.0,
+                        weaker
+                    ),
+                });
+            }
+        }
+    }
+
+    // --- MEDIUM: shadow opportunity per reason (global) ---
+    for reason_stat in &shadows.per_skip_reason {
+        if reason_stat.count >= 5 && reason_stat.wr >= 0.70 && reason_stat.pnl > 0.0 {
+            recs.push(Recommendation {
+                asset: None,
+                priority: "MEDIUM",
+                category: "shadow_opportunity",
+                message: format!(
+                    "Shadow trades with skip_reason='{}': {} trades, {:.0}% WR, {:.2} USDC PnL. \
+                     This filter may be blocking profitable opportunities.",
+                    reason_stat.reason,
+                    reason_stat.count,
+                    reason_stat.wr * 100.0,
+                    reason_stat.pnl
+                ),
+            });
+        }
+    }
+
+    // --- MEDIUM: overall shadow performance (global) ---
     if shadows.total_resolved > 10 && shadows.overall_wr >= 0.65 && shadows.overall_pnl > 5.0 {
         recs.push(Recommendation {
+            asset: None,
             priority: "MEDIUM",
             category: "shadow_overall",
             message: format!(
                 "Overall shadow performance: {} resolved, {:.0}% WR, {:.2} USDC PnL. \
                  Filters are collectively blocking profitable trades.",
-                shadows.total_resolved, shadows.overall_wr * 100.0, shadows.overall_pnl
+                shadows.total_resolved,
+                shadows.overall_wr * 100.0,
+                shadows.overall_pnl
             ),
         });
     }
 
-    // --- MEDIUM: poor recent real WR ---
+    // --- MEDIUM: poor recent real WR (global) ---
     if real_trades.resolved >= 10 && real_trades.wr < 0.50 {
         recs.push(Recommendation {
+            asset: None,
             priority: "MEDIUM",
             category: "performance",
             message: format!(
                 "Recent real trade WR is low: {:.0}% over {} resolved trades ({:.2} USDC PnL). \
                  Strategy may need recalibration.",
-                real_trades.wr * 100.0, real_trades.resolved, real_trades.pnl
+                real_trades.wr * 100.0,
+                real_trades.resolved,
+                real_trades.pnl
             ),
         });
     }
@@ -773,6 +988,7 @@ fn build_recommendations(
     // --- INFO fallback ---
     if recs.is_empty() {
         recs.push(Recommendation {
+            asset: None,
             priority: "INFO",
             category: "market",
             message: "No clear actionable issues found. Inactivity may be due to \
@@ -846,6 +1062,14 @@ mod tests {
         assert!(!section.deadlock_detected);
     }
 
+    fn empty_calibration() -> CalibrationSummary {
+        CalibrationSummary {
+            loaded: false,
+            global_version: 0,
+            per_asset: vec![],
+        }
+    }
+
     fn default_real_trades() -> RealTradePerformance {
         RealTradePerformance {
             lookback_hours: 24,
@@ -855,6 +1079,7 @@ mod tests {
             wr: 0.0,
             pnl: 0.0,
             per_asset: vec![],
+            per_asset_direction: vec![],
             last_trade_at: None,
             hours_since_last_trade: None,
         }
@@ -893,7 +1118,7 @@ mod tests {
             per_asset: vec![],
         };
 
-        let recs = build_recommendations(&balance, &skips, &shadows, &default_real_trades(), &default_balance_trend());
+        let recs = build_recommendations(&balance, &skips, &shadows, &default_real_trades(), &default_balance_trend(), &empty_calibration());
         assert!(recs.iter().any(|r| r.category == "skip_filter"));
     }
 
@@ -921,7 +1146,7 @@ mod tests {
             per_asset: vec![],
         };
 
-        let recs = build_recommendations(&balance, &skips, &shadows, &default_real_trades(), &default_balance_trend());
+        let recs = build_recommendations(&balance, &skips, &shadows, &default_real_trades(), &default_balance_trend(), &empty_calibration());
         assert!(recs.iter().any(|r| r.priority == "CRITICAL" && r.category == "balance"));
     }
 
@@ -955,7 +1180,7 @@ mod tests {
             current_drawdown_pct: 27.1,
         };
 
-        let recs = build_recommendations(&balance, &skips, &shadows, &default_real_trades(), &trend);
+        let recs = build_recommendations(&balance, &skips, &shadows, &default_real_trades(), &trend, &empty_calibration());
         assert!(recs.iter().any(|r| r.priority == "HIGH" && r.category == "drawdown"));
     }
 
@@ -990,11 +1215,175 @@ mod tests {
             wr: 0.33,
             pnl: -25.0,
             per_asset: vec![],
+            per_asset_direction: vec![],
             last_trade_at: Some(Utc::now()),
             hours_since_last_trade: Some(0.5),
         };
 
-        let recs = build_recommendations(&balance, &skips, &shadows, &real, &default_balance_trend());
+        let recs = build_recommendations(&balance, &skips, &shadows, &real, &default_balance_trend(), &empty_calibration());
         assert!(recs.iter().any(|r| r.priority == "MEDIUM" && r.category == "performance"));
+    }
+
+    fn healthy_balance() -> BalanceSection {
+        BalanceSection {
+            available_balance: "549".to_string(),
+            deadlock_detected: false,
+            max_order_usdc: "27.45".to_string(),
+            min_order_usdc: "10".to_string(),
+            min_order_usdc_floor: "2".to_string(),
+            dynamic_min: "10".to_string(),
+        }
+    }
+
+    fn empty_skips() -> SkipAnalysis {
+        SkipAnalysis {
+            total_skips: 0,
+            reason_distribution: vec![],
+            top_blocker: None,
+            asset_distribution: vec![],
+        }
+    }
+
+    fn empty_shadows() -> ShadowAnalysis {
+        ShadowAnalysis {
+            total_resolved: 0,
+            overall_wr: 0.0,
+            overall_pnl: 0.0,
+            per_skip_reason: vec![],
+            per_asset: vec![],
+        }
+    }
+
+    #[test]
+    fn recommendations_per_asset_low_wr() {
+        let real = RealTradePerformance {
+            lookback_hours: 24,
+            total_trades: 5,
+            resolved: 5,
+            pending: 0,
+            wr: 0.5,
+            pnl: 0.0,
+            per_asset: vec![RealTradeAssetSummary {
+                asset: "eth".to_string(),
+                count: 4,
+                wr: 0.40,
+                pnl: -12.0,
+            }],
+            per_asset_direction: vec![],
+            last_trade_at: None,
+            hours_since_last_trade: None,
+        };
+        let recs = build_recommendations(
+            &healthy_balance(),
+            &empty_skips(),
+            &empty_shadows(),
+            &real,
+            &default_balance_trend(),
+            &empty_calibration(),
+        );
+        let r = recs
+            .iter()
+            .find(|r| r.category == "asset_performance")
+            .expect("asset_performance");
+        assert_eq!(r.asset.as_deref(), Some("eth"));
+        assert_eq!(r.priority, "MEDIUM");
+    }
+
+    #[test]
+    fn recommendations_per_asset_shadow_opportunity() {
+        let shadows = ShadowAnalysis {
+            total_resolved: 6,
+            overall_wr: 0.0,
+            overall_pnl: 0.0,
+            per_skip_reason: vec![],
+            per_asset: vec![ShadowAssetSummary {
+                asset: "sol".to_string(),
+                count: 6,
+                wr: 0.70,
+                pnl: 25.0,
+            }],
+        };
+        let recs = build_recommendations(
+            &healthy_balance(),
+            &empty_skips(),
+            &shadows,
+            &default_real_trades(),
+            &default_balance_trend(),
+            &empty_calibration(),
+        );
+        let r = recs
+            .iter()
+            .find(|r| r.category == "asset_shadow_opportunity")
+            .expect("asset_shadow_opportunity");
+        assert_eq!(r.asset.as_deref(), Some("sol"));
+    }
+
+    #[test]
+    fn recommendations_direction_imbalance() {
+        let real = RealTradePerformance {
+            lookback_hours: 24,
+            total_trades: 10,
+            resolved: 10,
+            pending: 0,
+            wr: 0.6,
+            pnl: 1.0,
+            per_asset: vec![],
+            per_asset_direction: vec![RealTradeDirectionSummary {
+                asset: "btc".to_string(),
+                yes_count: 3,
+                yes_wr: 0.30,
+                no_count: 3,
+                no_wr: 0.90,
+            }],
+            last_trade_at: None,
+            hours_since_last_trade: None,
+        };
+        let recs = build_recommendations(
+            &healthy_balance(),
+            &empty_skips(),
+            &empty_shadows(),
+            &real,
+            &default_balance_trend(),
+            &empty_calibration(),
+        );
+        let r = recs
+            .iter()
+            .find(|r| r.category == "direction_imbalance")
+            .expect("direction_imbalance");
+        assert_eq!(r.asset.as_deref(), Some("btc"));
+        assert!(r.message.contains("YES"));
+        assert!(r.message.contains("NO"));
+    }
+
+    #[test]
+    fn recommendations_calibration_drift_info() {
+        let cal = CalibrationSummary {
+            loaded: true,
+            global_version: 1,
+            per_asset: vec![CalibrationAssetSummary {
+                asset: "xrp".to_string(),
+                calibration_version: 2,
+                shadow_wr: 0.5,
+                shadow_pnl: 1.0,
+                shadow_trade_count: 10,
+                last_calibrated_at: "2025-01-01T00:00:00Z".to_string(),
+                rolled_back: false,
+                drift_params: 12,
+            }],
+        };
+        let recs = build_recommendations(
+            &healthy_balance(),
+            &empty_skips(),
+            &empty_shadows(),
+            &default_real_trades(),
+            &default_balance_trend(),
+            &cal,
+        );
+        let r = recs
+            .iter()
+            .find(|r| r.category == "calibration_drift")
+            .expect("calibration_drift");
+        assert_eq!(r.asset.as_deref(), Some("xrp"));
+        assert_eq!(r.priority, "INFO");
     }
 }

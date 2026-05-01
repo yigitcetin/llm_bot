@@ -7,6 +7,7 @@
 use std::time::{Duration, Instant};
 use tracing::warn;
 
+use crate::adaptive;
 use crate::risk::RiskManager;
 
 const INACTIVITY_WARN_SECS: u64 = 4 * 3600; // 4 hours with zero trades
@@ -41,7 +42,8 @@ impl InactivityWatchdog {
 
     /// Call after each cycle completes. `trades_this_cycle` is the number of
     /// trades placed (reserved or executed) during this cycle.
-    pub fn on_cycle_end(&mut self, trades_this_cycle: u32, risk: &RiskManager) {
+    /// When `data_dir` is set, hourly balance logs include recent closed-trade WR/PnL snapshots.
+    pub fn on_cycle_end(&mut self, trades_this_cycle: u32, risk: &RiskManager, data_dir: Option<&str>) {
         self.total_cycles += 1;
 
         if trades_this_cycle > 0 {
@@ -52,7 +54,7 @@ impl InactivityWatchdog {
         }
 
         self.check_inactivity(risk);
-        self.maybe_log_balance(risk);
+        self.maybe_log_balance(risk, data_dir);
     }
 
     /// Call whenever an `order_size_below_minimum` skip occurs.
@@ -113,15 +115,33 @@ impl InactivityWatchdog {
         false
     }
 
-    fn maybe_log_balance(&mut self, risk: &RiskManager) {
+    fn maybe_log_balance(&mut self, risk: &RiskManager, data_dir: Option<&str>) {
         if self.last_balance_log.elapsed() >= Duration::from_secs(BALANCE_LOG_INTERVAL_SECS) {
             self.last_balance_log = Instant::now();
-            tracing::info!(
-                balance = %risk.available_balance(),
-                total_cycles = self.total_cycles,
-                total_trades = self.total_trades,
-                "periodic balance status"
-            );
+
+            let trades_path = data_dir.map(|d| format!("{}/trades.jsonl", d));
+            let health = trades_path
+                .as_ref()
+                .and_then(|p| adaptive::recent_closed_trade_metrics(p, 50));
+
+            if let Some((wr, pnl, n)) = health {
+                tracing::info!(
+                    balance = %risk.available_balance(),
+                    total_cycles = self.total_cycles,
+                    total_trades = self.total_trades,
+                    recent_wr_pct = wr * 100.0,
+                    recent_pnl_usdc = pnl,
+                    recent_trade_window = n,
+                    "periodic balance status"
+                );
+            } else {
+                tracing::info!(
+                    balance = %risk.available_balance(),
+                    total_cycles = self.total_cycles,
+                    total_trades = self.total_trades,
+                    "periodic balance status"
+                );
+            }
         }
     }
 

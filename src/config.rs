@@ -1349,6 +1349,41 @@ impl AppConfig {
                     exclude_params: sc
                         .and_then(|s| s.exclude_params.clone())
                         .unwrap_or_default(),
+                    live_veto_enabled: env_toml_bool(
+                        "SHADOW_CALIBRATION_LIVE_VETO_ENABLED",
+                        sc.and_then(|s| s.live_veto_enabled),
+                        true,
+                    ),
+                    live_veto_window: env_toml_usize(
+                        "SHADOW_CALIBRATION_LIVE_VETO_WINDOW",
+                        sc.and_then(|s| s.live_veto_window),
+                        10,
+                    ),
+                    live_veto_min_trades: env_toml_usize(
+                        "SHADOW_CALIBRATION_LIVE_VETO_MIN_TRADES",
+                        sc.and_then(|s| s.live_veto_min_trades),
+                        3,
+                    ),
+                    live_veto_wr_threshold: env_toml_f64(
+                        "SHADOW_CALIBRATION_LIVE_VETO_WR_THRESHOLD",
+                        sc.and_then(|s| s.live_veto_wr_threshold),
+                        0.40,
+                    ),
+                    live_veto_soft_wr: env_toml_f64(
+                        "SHADOW_CALIBRATION_LIVE_VETO_SOFT_WR",
+                        sc.and_then(|s| s.live_veto_soft_wr),
+                        0.50,
+                    ),
+                    live_veto_pnl_threshold: env_toml_f64(
+                        "SHADOW_CALIBRATION_LIVE_VETO_PNL_THRESHOLD",
+                        sc.and_then(|s| s.live_veto_pnl_threshold),
+                        -10.0,
+                    ),
+                    live_direction_veto_wr: env_toml_f64(
+                        "SHADOW_CALIBRATION_LIVE_DIRECTION_VETO_WR",
+                        sc.and_then(|s| s.live_direction_veto_wr),
+                        0.30,
+                    ),
                 }
             },
 

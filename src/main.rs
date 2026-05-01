@@ -169,11 +169,11 @@ async fn main() -> Result<()> {
                 for _ in 0..stats.order_size_skips {
                     watchdog.on_order_size_skip(bal, rep.max_position_pct, rep.min_order_usdc, dyn_min);
                 }
-                watchdog.on_cycle_end(stats.trades_placed, &risk);
+                watchdog.on_cycle_end(stats.trades_placed, &risk, Some(cfg.data_dir.as_str()));
             }
             Err(e) => {
                 tracing::error!(error = %e, "cycle error — sleeping before retry");
-                watchdog.on_cycle_end(0, &risk);
+                watchdog.on_cycle_end(0, &risk, Some(cfg.data_dir.as_str()));
             }
         }
 
@@ -183,7 +183,11 @@ async fn main() -> Result<()> {
                 risk.available_balance(),
                 &base_strategies,
             ) {
-                Ok(path) => info!(path = %path, "diagnostic report written"),
+                Ok((path, summary)) => info!(
+                    path = %path,
+                    summary = %summary,
+                    "diagnostic report written"
+                ),
                 Err(e) => tracing::error!(error = %e, "failed to generate diagnostic report"),
             }
         }
