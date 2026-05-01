@@ -1,0 +1,466 @@
+{
+  "generated_at": "2026-05-01T01:48:55.217024Z",
+  "lookback_hours": 4,
+  "balance": {
+    "available_balance": "301.31605441331601131041826104",
+    "deadlock_detected": false,
+    "max_order_usdc": "15.07",
+    "min_order_usdc": "10",
+    "min_order_usdc_floor": "2",
+    "dynamic_min": "10"
+  },
+  "real_trade_performance": {
+    "lookback_hours": 24,
+    "total_trades": 29,
+    "resolved": 29,
+    "pending": 0,
+    "wr": 0.5517241379310345,
+    "pnl": 28.651930054220195,
+    "per_asset": [
+      {
+        "asset": "sol",
+        "count": 6,
+        "wr": 0.6666666666666666,
+        "pnl": 18.475767665556788
+      },
+      {
+        "asset": "xrp",
+        "count": 9,
+        "wr": 0.5555555555555556,
+        "pnl": 7.086006402561026
+      },
+      {
+        "asset": "eth",
+        "count": 6,
+        "wr": 0.5,
+        "pnl": 6.965760869565216
+      },
+      {
+        "asset": "bnb",
+        "count": 2,
+        "wr": 0.5,
+        "pnl": -0.3921568627450984
+      },
+      {
+        "asset": "btc",
+        "count": 2,
+        "wr": 0.5,
+        "pnl": -1.1320754716981138
+      },
+      {
+        "asset": "doge",
+        "count": 4,
+        "wr": 0.5,
+        "pnl": -2.351372549019608
+      }
+    ],
+    "last_trade_at": "2026-04-30T21:48:35.489920100Z",
+    "hours_since_last_trade": 4.0
+  },
+  "skip_analysis": {
+    "total_skips": 1434,
+    "reason_distribution": [
+      {
+        "reason": "liquidity_too_low",
+        "count": 946,
+        "pct": 65.96931659693166
+      },
+      {
+        "reason": "too_far_from_expiry",
+        "count": 296,
+        "pct": 20.641562064156208
+      },
+      {
+        "reason": "market_yes_price_out_of_band",
+        "count": 123,
+        "pct": 8.577405857740587
+      },
+      {
+        "reason": "spot_volume_below_threshold",
+        "count": 32,
+        "pct": 2.2315202231520224
+      },
+      {
+        "reason": "too_close_to_expiry",
+        "count": 13,
+        "pct": 0.906555090655509
+      },
+      {
+        "reason": "already_have_open_position",
+        "count": 9,
+        "pct": 0.6276150627615062
+      },
+      {
+        "reason": "edge_too_small",
+        "count": 5,
+        "pct": 0.3486750348675035
+      },
+      {
+        "reason": "macd_histogram_too_weak",
+        "count": 4,
+        "pct": 0.2789400278940028
+      },
+      {
+        "reason": "taker_direction_misaligned",
+        "count": 2,
+        "pct": 0.1394700139470014
+      },
+      {
+        "reason": "volatility_filter",
+        "count": 2,
+        "pct": 0.1394700139470014
+      },
+      {
+        "reason": "rsi_yes_over_max",
+        "count": 2,
+        "pct": 0.1394700139470014
+      }
+    ],
+    "top_blocker": "liquidity_too_low",
+    "asset_distribution": [
+      {
+        "asset": "btc",
+        "count": 239,
+        "top_reason": "liquidity_too_low"
+      },
+      {
+        "asset": "doge",
+        "count": 239,
+        "top_reason": "liquidity_too_low"
+      },
+      {
+        "asset": "xrp",
+        "count": 239,
+        "top_reason": "liquidity_too_low"
+      },
+      {
+        "asset": "eth",
+        "count": 239,
+        "top_reason": "liquidity_too_low"
+      },
+      {
+        "asset": "sol",
+        "count": 239,
+        "top_reason": "liquidity_too_low"
+      },
+      {
+        "asset": "bnb",
+        "count": 239,
+        "top_reason": "liquidity_too_low"
+      }
+    ]
+  },
+  "skip_time_trend": [
+    {
+      "hour_label": "2026-04-30 21:00",
+      "count": 66,
+      "top_reason": "liquidity_too_low"
+    },
+    {
+      "hour_label": "2026-04-30 22:00",
+      "count": 354,
+      "top_reason": "liquidity_too_low"
+    },
+    {
+      "hour_label": "2026-04-30 23:00",
+      "count": 360,
+      "top_reason": "liquidity_too_low"
+    },
+    {
+      "hour_label": "2026-05-01 00:00",
+      "count": 360,
+      "top_reason": "liquidity_too_low"
+    },
+    {
+      "hour_label": "2026-05-01 01:00",
+      "count": 294,
+      "top_reason": "liquidity_too_low"
+    }
+  ],
+  "shadow_analysis": {
+    "total_resolved": 14,
+    "overall_wr": 0.8571428571428571,
+    "overall_pnl": 49.73146674999999,
+    "per_skip_reason": [
+      {
+        "reason": "edge_too_small",
+        "count": 5,
+        "wr": 0.8,
+        "pnl": 13.86881356
+      },
+      {
+        "reason": "macd_histogram_too_weak",
+        "count": 4,
+        "wr": 1.0,
+        "pnl": 20.05006328
+      },
+      {
+        "reason": "volatility_filter",
+        "count": 2,
+        "wr": 1.0,
+        "pnl": 10.44221972
+      },
+      {
+        "reason": "taker_direction_misaligned",
+        "count": 2,
+        "wr": 0.5,
+        "pnl": -0.7407408599999998
+      },
+      {
+        "reason": "rsi_yes_over_max",
+        "count": 1,
+        "wr": 1.0,
+        "pnl": 6.11111105
+      }
+    ],
+    "per_asset": [
+      {
+        "asset": "eth",
+        "count": 4,
+        "wr": 1.0,
+        "pnl": 19.24588752
+      },
+      {
+        "asset": "doge",
+        "count": 3,
+        "wr": 0.6666666666666666,
+        "pnl": 5.37037019
+      },
+      {
+        "asset": "sol",
+        "count": 3,
+        "wr": 1.0,
+        "pnl": 15.057604520000002
+      },
+      {
+        "asset": "xrp",
+        "count": 2,
+        "wr": 1.0,
+        "pnl": 10.25368274
+      },
+      {
+        "asset": "btc",
+        "count": 1,
+        "wr": 0.0,
+        "pnl": -5.0
+      },
+      {
+        "asset": "bnb",
+        "count": 1,
+        "wr": 1.0,
+        "pnl": 4.80392178
+      }
+    ]
+  },
+  "calibration_status": {
+    "loaded": true,
+    "global_version": 42,
+    "per_asset": [
+      {
+        "asset": "bnb",
+        "calibration_version": 38,
+        "shadow_wr": 0.6428571428571429,
+        "shadow_pnl": 82.53922388999997,
+        "shadow_trade_count": 56,
+        "last_calibrated_at": "2026-04-30T22:06:44.387909400+00:00",
+        "rolled_back": false,
+        "drift_params": 12
+      },
+      {
+        "asset": "btc",
+        "calibration_version": 27,
+        "shadow_wr": 0.7435897435897436,
+        "shadow_pnl": 88.06464413,
+        "shadow_trade_count": 39,
+        "last_calibrated_at": "2026-04-30T10:51:34.399316800+00:00",
+        "rolled_back": false,
+        "drift_params": 13
+      },
+      {
+        "asset": "doge",
+        "calibration_version": 34,
+        "shadow_wr": 0.47619047619047616,
+        "shadow_pnl": -12.102360680000007,
+        "shadow_trade_count": 42,
+        "last_calibrated_at": "2026-04-30T19:20:37.776415900+00:00",
+        "rolled_back": false,
+        "drift_params": 10
+      },
+      {
+        "asset": "eth",
+        "calibration_version": 41,
+        "shadow_wr": 0.7272727272727273,
+        "shadow_pnl": 46.70265342,
+        "shadow_trade_count": 22,
+        "last_calibrated_at": "2026-04-30T23:52:20.451113100+00:00",
+        "rolled_back": false,
+        "drift_params": 10
+      },
+      {
+        "asset": "sol",
+        "calibration_version": 40,
+        "shadow_wr": 0.5909090909090909,
+        "shadow_pnl": 40.614925879999994,
+        "shadow_trade_count": 44,
+        "last_calibrated_at": "2026-04-30T23:36:14.146773500+00:00",
+        "rolled_back": false,
+        "drift_params": 11
+      },
+      {
+        "asset": "xrp",
+        "calibration_version": 42,
+        "shadow_wr": 0.7457627118644068,
+        "shadow_pnl": 141.02100402999994,
+        "shadow_trade_count": 59,
+        "last_calibrated_at": "2026-05-01T00:51:38.451556600+00:00",
+        "rolled_back": false,
+        "drift_params": 12
+      }
+    ]
+  },
+  "balance_trend": {
+    "data_points": [
+      {
+        "timestamp": "2026-04-30T02:03:09.766864200Z",
+        "balance": 272.6641243590958
+      },
+      {
+        "timestamp": "2026-04-30T02:17:18.950279100Z",
+        "balance": 262.6641243590958
+      },
+      {
+        "timestamp": "2026-04-30T02:32:30.923653100Z",
+        "balance": 272.6641243590958
+      },
+      {
+        "timestamp": "2026-04-30T02:32:30.927458700Z",
+        "balance": 259.0341243590958
+      },
+      {
+        "timestamp": "2026-04-30T02:33:32.540056400Z",
+        "balance": 249.0341243590958
+      },
+      {
+        "timestamp": "2026-04-30T03:01:53.286562600Z",
+        "balance": 308.85495769242914
+      },
+      {
+        "timestamp": "2026-04-30T05:33:17.289086300Z",
+        "balance": 298.85495769242914
+      },
+      {
+        "timestamp": "2026-04-30T07:19:19.955224300Z",
+        "balance": 307.72288222073104
+      },
+      {
+        "timestamp": "2026-04-30T07:33:29.262406100Z",
+        "balance": 297.72288222073104
+      },
+      {
+        "timestamp": "2026-04-30T07:33:29.267048200Z",
+        "balance": 287.72288222073104
+      },
+      {
+        "timestamp": "2026-04-30T08:33:07.621787500Z",
+        "balance": 341.2011430902962
+      },
+      {
+        "timestamp": "2026-04-30T09:32:45.599571400Z",
+        "balance": 350.80898622755115
+      },
+      {
+        "timestamp": "2026-04-30T10:02:03.685448200Z",
+        "balance": 338.5789862275511
+      },
+      {
+        "timestamp": "2026-04-30T10:17:12.033771100Z",
+        "balance": 328.5789862275511
+      },
+      {
+        "timestamp": "2026-04-30T11:18:50.044992400Z",
+        "balance": 358.18682936480604
+      },
+      {
+        "timestamp": "2026-04-30T15:03:56.540106700Z",
+        "balance": 348.18682936480604
+      },
+      {
+        "timestamp": "2026-04-30T15:03:56.542198600Z",
+        "balance": 338.18682936480604
+      },
+      {
+        "timestamp": "2026-04-30T15:33:08.304373200Z",
+        "balance": 328.18682936480604
+      },
+      {
+        "timestamp": "2026-04-30T15:33:08.307066400Z",
+        "balance": 317.48682936480606
+      },
+      {
+        "timestamp": "2026-04-30T15:34:09.181204600Z",
+        "balance": 307.48682936480606
+      },
+      {
+        "timestamp": "2026-04-30T15:47:14.872647500Z",
+        "balance": 297.48682936480606
+      },
+      {
+        "timestamp": "2026-04-30T16:02:22.411906200Z",
+        "balance": 287.48682936480606
+      },
+      {
+        "timestamp": "2026-04-30T16:02:22.414064700Z",
+        "balance": 277.48682936480606
+      },
+      {
+        "timestamp": "2026-04-30T16:02:22.415822900Z",
+        "balance": 267.36682936480605
+      },
+      {
+        "timestamp": "2026-04-30T16:18:30.072776900Z",
+        "balance": 277.36682936480605
+      },
+      {
+        "timestamp": "2026-04-30T18:17:12.686372200Z",
+        "balance": 327.6181298850141
+      },
+      {
+        "timestamp": "2026-04-30T18:50:25.171337900Z",
+        "balance": 312.4481298850141
+      },
+      {
+        "timestamp": "2026-04-30T19:33:43.173665800Z",
+        "balance": 302.4481298850141
+      },
+      {
+        "timestamp": "2026-04-30T21:48:35.489920100Z",
+        "balance": 292.4481298850141
+      }
+    ],
+    "peak_balance": 358.18682936480604,
+    "trough_balance": 249.0341243590958,
+    "current_drawdown_pct": 18.353187244871698
+  },
+  "recommendations": [
+    {
+      "priority": "HIGH",
+      "category": "skip_filter",
+      "message": "'liquidity_too_low' accounts for 66% of all skips (946/1434 in last 4 hours). Consider relaxing this filter or adjusting related thresholds."
+    },
+    {
+      "priority": "HIGH",
+      "category": "drawdown",
+      "message": "Balance drawdown is 18.4% from peak (358.19 → current 301.31605441331601131041826104). Consider pausing or reducing position sizes."
+    },
+    {
+      "priority": "MEDIUM",
+      "category": "shadow_opportunity",
+      "message": "Shadow trades with skip_reason='edge_too_small': 5 trades, 80% WR, 13.87 USDC PnL. This filter may be blocking profitable opportunities."
+    },
+    {
+      "priority": "MEDIUM",
+      "category": "shadow_overall",
+      "message": "Overall shadow performance: 14 resolved, 86% WR, 49.73 USDC PnL. Filters are collectively blocking profitable trades."
+    }
+  ]
+}
