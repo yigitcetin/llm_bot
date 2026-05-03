@@ -1,0 +1,418 @@
+{
+  "generated_at": "2026-05-02T03:52:30.244038400Z",
+  "lookback_hours": 4,
+  "balance": {
+    "available_balance": "193.51659863945578231292517006",
+    "deadlock_detected": false,
+    "max_order_usdc": "9.68",
+    "min_order_usdc": "10",
+    "min_order_usdc_floor": "2",
+    "dynamic_min": "7.74"
+  },
+  "real_trade_performance": {
+    "lookback_hours": 24,
+    "total_trades": 5,
+    "resolved": 5,
+    "pending": 0,
+    "wr": 0.4,
+    "pnl": -6.483401360544218,
+    "per_asset": [
+      {
+        "asset": "doge",
+        "count": 1,
+        "wr": 1.0,
+        "pnl": 9.203333333333333
+      },
+      {
+        "asset": "eth",
+        "count": 2,
+        "wr": 0.5,
+        "pnl": -0.006734693877551656
+      },
+      {
+        "asset": "sol",
+        "count": 2,
+        "wr": 0.0,
+        "pnl": -15.68
+      }
+    ],
+    "per_asset_direction": [
+      {
+        "asset": "doge",
+        "yes_count": 1,
+        "yes_wr": 1.0,
+        "no_count": 0,
+        "no_wr": 0.0
+      },
+      {
+        "asset": "eth",
+        "yes_count": 1,
+        "yes_wr": 1.0,
+        "no_count": 1,
+        "no_wr": 0.0
+      },
+      {
+        "asset": "sol",
+        "yes_count": 0,
+        "yes_wr": 0.0,
+        "no_count": 2,
+        "no_wr": 0.0
+      }
+    ],
+    "last_trade_at": "2026-05-01T19:51:34.910599600Z",
+    "hours_since_last_trade": 8.0
+  },
+  "skip_analysis": {
+    "total_skips": 1428,
+    "reason_distribution": [
+      {
+        "reason": "liquidity_too_low",
+        "count": 973,
+        "pct": 68.13725490196079
+      },
+      {
+        "reason": "too_far_from_expiry",
+        "count": 337,
+        "pct": 23.599439775910362
+      },
+      {
+        "reason": "market_yes_price_out_of_band",
+        "count": 50,
+        "pct": 3.5014005602240896
+      },
+      {
+        "reason": "spot_volume_below_threshold",
+        "count": 32,
+        "pct": 2.2408963585434174
+      },
+      {
+        "reason": "momentum_5m_too_weak",
+        "count": 7,
+        "pct": 0.49019607843137253
+      },
+      {
+        "reason": "macd_histogram_too_weak",
+        "count": 7,
+        "pct": 0.49019607843137253
+      },
+      {
+        "reason": "too_close_to_expiry",
+        "count": 6,
+        "pct": 0.42016806722689076
+      },
+      {
+        "reason": "edge_too_small",
+        "count": 5,
+        "pct": 0.350140056022409
+      },
+      {
+        "reason": "volatility_filter",
+        "count": 4,
+        "pct": 0.2801120448179272
+      },
+      {
+        "reason": "taker_direction_misaligned",
+        "count": 3,
+        "pct": 0.21008403361344538
+      },
+      {
+        "reason": "direction_confidence_penalized",
+        "count": 1,
+        "pct": 0.0700280112044818
+      },
+      {
+        "reason": "confidence_too_low",
+        "count": 1,
+        "pct": 0.0700280112044818
+      },
+      {
+        "reason": "rsi_yes_over_max",
+        "count": 1,
+        "pct": 0.0700280112044818
+      },
+      {
+        "reason": "no_edge_after_direction_override",
+        "count": 1,
+        "pct": 0.0700280112044818
+      }
+    ],
+    "top_blocker": "liquidity_too_low",
+    "asset_distribution": [
+      {
+        "asset": "eth",
+        "count": 238,
+        "top_reason": "liquidity_too_low"
+      },
+      {
+        "asset": "xrp",
+        "count": 238,
+        "top_reason": "liquidity_too_low"
+      },
+      {
+        "asset": "doge",
+        "count": 238,
+        "top_reason": "liquidity_too_low"
+      },
+      {
+        "asset": "sol",
+        "count": 238,
+        "top_reason": "liquidity_too_low"
+      },
+      {
+        "asset": "btc",
+        "count": 238,
+        "top_reason": "liquidity_too_low"
+      },
+      {
+        "asset": "bnb",
+        "count": 238,
+        "top_reason": "liquidity_too_low"
+      }
+    ]
+  },
+  "skip_time_trend": [
+    {
+      "hour_label": "2026-05-01 23:00",
+      "count": 42,
+      "top_reason": "liquidity_too_low"
+    },
+    {
+      "hour_label": "2026-05-02 00:00",
+      "count": 360,
+      "top_reason": "liquidity_too_low"
+    },
+    {
+      "hour_label": "2026-05-02 01:00",
+      "count": 360,
+      "top_reason": "liquidity_too_low"
+    },
+    {
+      "hour_label": "2026-05-02 02:00",
+      "count": 354,
+      "top_reason": "liquidity_too_low"
+    },
+    {
+      "hour_label": "2026-05-02 03:00",
+      "count": 312,
+      "top_reason": "liquidity_too_low"
+    }
+  ],
+  "shadow_analysis": {
+    "total_resolved": 30,
+    "overall_wr": 0.5666666666666667,
+    "overall_pnl": 13.581970649999999,
+    "per_skip_reason": [
+      {
+        "reason": "momentum_5m_too_weak",
+        "count": 7,
+        "wr": 0.2857142857142857,
+        "pnl": -12.52525279
+      },
+      {
+        "reason": "macd_histogram_too_weak",
+        "count": 7,
+        "wr": 0.42857142857142855,
+        "pnl": -5.392156440000001
+      },
+      {
+        "reason": "edge_too_small",
+        "count": 5,
+        "wr": 1.0,
+        "pnl": 19.73443172
+      },
+      {
+        "reason": "volatility_filter",
+        "count": 4,
+        "wr": 0.75,
+        "pnl": 9.411765339999999
+      },
+      {
+        "reason": "taker_direction_misaligned",
+        "count": 3,
+        "wr": 0.6666666666666666,
+        "pnl": 3.7324930199999997
+      },
+      {
+        "reason": "rsi_yes_over_max",
+        "count": 1,
+        "wr": 0.0,
+        "pnl": -5.0
+      },
+      {
+        "reason": "direction_confidence_penalized",
+        "count": 1,
+        "wr": 1.0,
+        "pnl": 5.0
+      },
+      {
+        "reason": "confidence_too_low",
+        "count": 1,
+        "wr": 0.0,
+        "pnl": -5.0
+      },
+      {
+        "reason": "no_edge_after_direction_override",
+        "count": 1,
+        "wr": 1.0,
+        "pnl": 3.6206898
+      }
+    ],
+    "per_asset": [
+      {
+        "asset": "doge",
+        "count": 10,
+        "wr": 0.5,
+        "pnl": -4.48179326
+      },
+      {
+        "asset": "bnb",
+        "count": 7,
+        "wr": 0.5714285714285714,
+        "pnl": 7.0825907699999995
+      },
+      {
+        "asset": "xrp",
+        "count": 6,
+        "wr": 0.8333333333333334,
+        "pnl": 17.75263978
+      },
+      {
+        "asset": "sol",
+        "count": 5,
+        "wr": 0.4,
+        "pnl": -5.392156440000001
+      },
+      {
+        "asset": "eth",
+        "count": 2,
+        "wr": 0.5,
+        "pnl": -1.3793102
+      }
+    ]
+  },
+  "calibration_status": {
+    "loaded": true,
+    "global_version": 13,
+    "per_asset": [
+      {
+        "asset": "bnb",
+        "calibration_version": 12,
+        "shadow_wr": 0.6785714285714286,
+        "shadow_pnl": 48.401498189999984,
+        "shadow_trade_count": 28,
+        "last_calibrated_at": "2026-05-02T02:37:04.916634100+00:00",
+        "rolled_back": false,
+        "drift_params": 11
+      },
+      {
+        "asset": "btc",
+        "calibration_version": 4,
+        "shadow_wr": 0.2222222222222222,
+        "shadow_pnl": -12.33074075,
+        "shadow_trade_count": 36,
+        "last_calibrated_at": "2026-05-01T19:21:15.980776400+00:00",
+        "rolled_back": false,
+        "drift_params": 11
+      },
+      {
+        "asset": "doge",
+        "calibration_version": 13,
+        "shadow_wr": 0.6551724137931034,
+        "shadow_pnl": 39.59709686999997,
+        "shadow_trade_count": 29,
+        "last_calibrated_at": "2026-05-02T02:37:04.916961500+00:00",
+        "rolled_back": false,
+        "drift_params": 11
+      },
+      {
+        "asset": "sol",
+        "calibration_version": 8,
+        "shadow_wr": 0.6,
+        "shadow_pnl": 18.80785232,
+        "shadow_trade_count": 20,
+        "last_calibrated_at": "2026-05-02T00:06:09.013992400+00:00",
+        "rolled_back": false,
+        "drift_params": 10
+      },
+      {
+        "asset": "xrp",
+        "calibration_version": 11,
+        "shadow_wr": 0.8333333333333334,
+        "shadow_pnl": 74.60669115999998,
+        "shadow_trade_count": 24,
+        "last_calibrated_at": "2026-05-02T01:37:42.349220400+00:00",
+        "rolled_back": false,
+        "drift_params": 11
+      }
+    ]
+  },
+  "balance_trend": {
+    "data_points": [
+      {
+        "timestamp": "2026-05-01T15:02:13.260685600Z",
+        "balance": 200.0
+      },
+      {
+        "timestamp": "2026-05-01T16:16:51.032364600Z",
+        "balance": 192.0
+      },
+      {
+        "timestamp": "2026-05-01T18:47:01.936731800Z",
+        "balance": 184.32
+      },
+      {
+        "timestamp": "2026-05-01T19:19:15.333968500Z",
+        "balance": 193.52333333333334
+      },
+      {
+        "timestamp": "2026-05-01T19:51:34.910599600Z",
+        "balance": 185.78333333333333
+      }
+    ],
+    "peak_balance": 200.0,
+    "trough_balance": 184.32,
+    "current_drawdown_pct": 7.108333333333334
+  },
+  "recommendations": [
+    {
+      "priority": "HIGH",
+      "category": "skip_filter",
+      "message": "'liquidity_too_low' accounts for 68% of all skips (973/1428 in last 4 hours). Consider relaxing this filter or adjusting related thresholds."
+    },
+    {
+      "asset": "bnb",
+      "priority": "INFO",
+      "category": "calibration_drift",
+      "message": "bnb: 11 calibrated parameter overrides active (shadow calibration). Review overrides vs base config if behaviour diverges from expectations."
+    },
+    {
+      "asset": "btc",
+      "priority": "INFO",
+      "category": "calibration_drift",
+      "message": "btc: 11 calibrated parameter overrides active (shadow calibration). Review overrides vs base config if behaviour diverges from expectations."
+    },
+    {
+      "asset": "doge",
+      "priority": "INFO",
+      "category": "calibration_drift",
+      "message": "doge: 11 calibrated parameter overrides active (shadow calibration). Review overrides vs base config if behaviour diverges from expectations."
+    },
+    {
+      "asset": "sol",
+      "priority": "INFO",
+      "category": "calibration_drift",
+      "message": "sol: 10 calibrated parameter overrides active (shadow calibration). Review overrides vs base config if behaviour diverges from expectations."
+    },
+    {
+      "asset": "xrp",
+      "priority": "INFO",
+      "category": "calibration_drift",
+      "message": "xrp: 11 calibrated parameter overrides active (shadow calibration). Review overrides vs base config if behaviour diverges from expectations."
+    },
+    {
+      "priority": "MEDIUM",
+      "category": "shadow_opportunity",
+      "message": "Shadow trades with skip_reason='edge_too_small': 5 trades, 100% WR, 19.73 USDC PnL. This filter may be blocking profitable opportunities."
+    }
+  ]
+}

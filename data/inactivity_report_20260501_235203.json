@@ -1,0 +1,413 @@
+{
+  "generated_at": "2026-05-01T23:52:03.679813400Z",
+  "lookback_hours": 4,
+  "balance": {
+    "available_balance": "193.51659863945578231292517006",
+    "deadlock_detected": false,
+    "max_order_usdc": "9.68",
+    "min_order_usdc": "10",
+    "min_order_usdc_floor": "2",
+    "dynamic_min": "7.74"
+  },
+  "real_trade_performance": {
+    "lookback_hours": 24,
+    "total_trades": 5,
+    "resolved": 5,
+    "pending": 0,
+    "wr": 0.4,
+    "pnl": -6.483401360544218,
+    "per_asset": [
+      {
+        "asset": "doge",
+        "count": 1,
+        "wr": 1.0,
+        "pnl": 9.203333333333333
+      },
+      {
+        "asset": "eth",
+        "count": 2,
+        "wr": 0.5,
+        "pnl": -0.006734693877551656
+      },
+      {
+        "asset": "sol",
+        "count": 2,
+        "wr": 0.0,
+        "pnl": -15.68
+      }
+    ],
+    "per_asset_direction": [
+      {
+        "asset": "doge",
+        "yes_count": 1,
+        "yes_wr": 1.0,
+        "no_count": 0,
+        "no_wr": 0.0
+      },
+      {
+        "asset": "eth",
+        "yes_count": 1,
+        "yes_wr": 1.0,
+        "no_count": 1,
+        "no_wr": 0.0
+      },
+      {
+        "asset": "sol",
+        "yes_count": 0,
+        "yes_wr": 0.0,
+        "no_count": 2,
+        "no_wr": 0.0
+      }
+    ],
+    "last_trade_at": "2026-05-01T19:51:34.910599600Z",
+    "hours_since_last_trade": 4.0
+  },
+  "skip_analysis": {
+    "total_skips": 1434,
+    "reason_distribution": [
+      {
+        "reason": "liquidity_too_low",
+        "count": 1002,
+        "pct": 69.8744769874477
+      },
+      {
+        "reason": "too_far_from_expiry",
+        "count": 209,
+        "pct": 14.574616457461644
+      },
+      {
+        "reason": "market_yes_price_out_of_band",
+        "count": 150,
+        "pct": 10.460251046025103
+      },
+      {
+        "reason": "too_close_to_expiry",
+        "count": 26,
+        "pct": 1.813110181311018
+      },
+      {
+        "reason": "spot_volume_below_threshold",
+        "count": 17,
+        "pct": 1.1854951185495117
+      },
+      {
+        "reason": "already_have_open_position",
+        "count": 6,
+        "pct": 0.41841004184100417
+      },
+      {
+        "reason": "edge_too_small",
+        "count": 4,
+        "pct": 0.2789400278940028
+      },
+      {
+        "reason": "direction_confidence_penalized",
+        "count": 4,
+        "pct": 0.2789400278940028
+      },
+      {
+        "reason": "macd_histogram_too_weak",
+        "count": 4,
+        "pct": 0.2789400278940028
+      },
+      {
+        "reason": "volatility_filter",
+        "count": 3,
+        "pct": 0.20920502092050208
+      },
+      {
+        "reason": "momentum_5m_too_weak",
+        "count": 2,
+        "pct": 0.1394700139470014
+      },
+      {
+        "reason": "no_edge_after_direction_override",
+        "count": 2,
+        "pct": 0.1394700139470014
+      },
+      {
+        "reason": "adaptive_direction_blocked",
+        "count": 2,
+        "pct": 0.1394700139470014
+      },
+      {
+        "reason": "confidence_too_low",
+        "count": 2,
+        "pct": 0.1394700139470014
+      },
+      {
+        "reason": "taker_direction_misaligned",
+        "count": 1,
+        "pct": 0.0697350069735007
+      }
+    ],
+    "top_blocker": "liquidity_too_low",
+    "asset_distribution": [
+      {
+        "asset": "doge",
+        "count": 239,
+        "top_reason": "liquidity_too_low"
+      },
+      {
+        "asset": "btc",
+        "count": 239,
+        "top_reason": "liquidity_too_low"
+      },
+      {
+        "asset": "xrp",
+        "count": 239,
+        "top_reason": "liquidity_too_low"
+      },
+      {
+        "asset": "bnb",
+        "count": 239,
+        "top_reason": "liquidity_too_low"
+      },
+      {
+        "asset": "sol",
+        "count": 239,
+        "top_reason": "liquidity_too_low"
+      },
+      {
+        "asset": "eth",
+        "count": 239,
+        "top_reason": "liquidity_too_low"
+      }
+    ]
+  },
+  "skip_time_trend": [
+    {
+      "hour_label": "2026-05-01 19:00",
+      "count": 48,
+      "top_reason": "too_close_to_expiry"
+    },
+    {
+      "hour_label": "2026-05-01 20:00",
+      "count": 354,
+      "top_reason": "liquidity_too_low"
+    },
+    {
+      "hour_label": "2026-05-01 21:00",
+      "count": 360,
+      "top_reason": "liquidity_too_low"
+    },
+    {
+      "hour_label": "2026-05-01 22:00",
+      "count": 360,
+      "top_reason": "liquidity_too_low"
+    },
+    {
+      "hour_label": "2026-05-01 23:00",
+      "count": 312,
+      "top_reason": "liquidity_too_low"
+    }
+  ],
+  "shadow_analysis": {
+    "total_resolved": 23,
+    "overall_wr": 0.7391304347826086,
+    "overall_pnl": 50.56748014999998,
+    "per_skip_reason": [
+      {
+        "reason": "direction_confidence_penalized",
+        "count": 4,
+        "wr": 0.75,
+        "pnl": 9.60784356
+      },
+      {
+        "reason": "edge_too_small",
+        "count": 4,
+        "wr": 1.0,
+        "pnl": 19.60784356
+      },
+      {
+        "reason": "macd_histogram_too_weak",
+        "count": 4,
+        "wr": 0.5,
+        "pnl": 0.0
+      },
+      {
+        "reason": "momentum_5m_too_weak",
+        "count": 2,
+        "wr": 0.5,
+        "pnl": 0.20408181999999986
+      },
+      {
+        "reason": "volatility_filter",
+        "count": 2,
+        "wr": 0.5,
+        "pnl": -0.1960782200000004
+      },
+      {
+        "reason": "no_edge_after_direction_override",
+        "count": 2,
+        "wr": 1.0,
+        "pnl": 6.39344238
+      },
+      {
+        "reason": "adaptive_direction_blocked",
+        "count": 2,
+        "wr": 1.0,
+        "pnl": 8.51851828
+      },
+      {
+        "reason": "confidence_too_low",
+        "count": 2,
+        "wr": 0.5,
+        "pnl": 1.6279069899999996
+      },
+      {
+        "reason": "taker_direction_misaligned",
+        "count": 1,
+        "wr": 1.0,
+        "pnl": 4.80392178
+      }
+    ],
+    "per_asset": [
+      {
+        "asset": "sol",
+        "count": 9,
+        "wr": 0.5555555555555556,
+        "pnl": 3.32244006
+      },
+      {
+        "asset": "xrp",
+        "count": 5,
+        "wr": 0.8,
+        "pnl": 11.39344238
+      },
+      {
+        "asset": "doge",
+        "count": 4,
+        "wr": 1.0,
+        "pnl": 21.03967233
+      },
+      {
+        "asset": "bnb",
+        "count": 2,
+        "wr": 0.5,
+        "pnl": -0.1960782200000004
+      },
+      {
+        "asset": "btc",
+        "count": 2,
+        "wr": 1.0,
+        "pnl": 10.204081819999999
+      },
+      {
+        "asset": "eth",
+        "count": 1,
+        "wr": 1.0,
+        "pnl": 4.80392178
+      }
+    ]
+  },
+  "calibration_status": {
+    "loaded": true,
+    "global_version": 7,
+    "per_asset": [
+      {
+        "asset": "bnb",
+        "calibration_version": 5,
+        "shadow_wr": 0.7142857142857143,
+        "shadow_pnl": 41.31890741999999,
+        "shadow_trade_count": 21,
+        "last_calibrated_at": "2026-05-01T20:06:53.102477300+00:00",
+        "rolled_back": false,
+        "drift_params": 11
+      },
+      {
+        "asset": "btc",
+        "calibration_version": 4,
+        "shadow_wr": 0.2222222222222222,
+        "shadow_pnl": -12.33074075,
+        "shadow_trade_count": 36,
+        "last_calibrated_at": "2026-05-01T19:21:15.980776400+00:00",
+        "rolled_back": false,
+        "drift_params": 11
+      },
+      {
+        "asset": "doge",
+        "calibration_version": 7,
+        "shadow_wr": 0.7,
+        "shadow_pnl": 39.07889012999999,
+        "shadow_trade_count": 20,
+        "last_calibrated_at": "2026-05-01T21:51:27.596965100+00:00",
+        "rolled_back": false,
+        "drift_params": 10
+      },
+      {
+        "asset": "xrp",
+        "calibration_version": 6,
+        "shadow_wr": 0.8,
+        "shadow_pnl": 60.07599379999999,
+        "shadow_trade_count": 20,
+        "last_calibrated_at": "2026-05-01T20:51:08.122049+00:00",
+        "rolled_back": false,
+        "drift_params": 11
+      }
+    ]
+  },
+  "balance_trend": {
+    "data_points": [
+      {
+        "timestamp": "2026-05-01T15:02:13.260685600Z",
+        "balance": 200.0
+      },
+      {
+        "timestamp": "2026-05-01T16:16:51.032364600Z",
+        "balance": 192.0
+      },
+      {
+        "timestamp": "2026-05-01T18:47:01.936731800Z",
+        "balance": 184.32
+      },
+      {
+        "timestamp": "2026-05-01T19:19:15.333968500Z",
+        "balance": 193.52333333333334
+      },
+      {
+        "timestamp": "2026-05-01T19:51:34.910599600Z",
+        "balance": 185.78333333333333
+      }
+    ],
+    "peak_balance": 200.0,
+    "trough_balance": 184.32,
+    "current_drawdown_pct": 7.108333333333334
+  },
+  "recommendations": [
+    {
+      "priority": "HIGH",
+      "category": "skip_filter",
+      "message": "'liquidity_too_low' accounts for 70% of all skips (1002/1434 in last 4 hours). Consider relaxing this filter or adjusting related thresholds."
+    },
+    {
+      "asset": "bnb",
+      "priority": "INFO",
+      "category": "calibration_drift",
+      "message": "bnb: 11 calibrated parameter overrides active (shadow calibration). Review overrides vs base config if behaviour diverges from expectations."
+    },
+    {
+      "asset": "btc",
+      "priority": "INFO",
+      "category": "calibration_drift",
+      "message": "btc: 11 calibrated parameter overrides active (shadow calibration). Review overrides vs base config if behaviour diverges from expectations."
+    },
+    {
+      "asset": "doge",
+      "priority": "INFO",
+      "category": "calibration_drift",
+      "message": "doge: 10 calibrated parameter overrides active (shadow calibration). Review overrides vs base config if behaviour diverges from expectations."
+    },
+    {
+      "asset": "xrp",
+      "priority": "INFO",
+      "category": "calibration_drift",
+      "message": "xrp: 11 calibrated parameter overrides active (shadow calibration). Review overrides vs base config if behaviour diverges from expectations."
+    },
+    {
+      "priority": "MEDIUM",
+      "category": "shadow_overall",
+      "message": "Overall shadow performance: 23 resolved, 74% WR, 50.57 USDC PnL. Filters are collectively blocking profitable trades."
+    }
+  ]
+}
