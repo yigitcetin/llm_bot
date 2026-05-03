@@ -1127,7 +1127,7 @@ impl AppConfig {
                 "15m",
             ),
 
-            htf_lookback: env_toml_usize("HTF_LOOKBACK", th.and_then(|h| h.lookback), 50),
+            htf_lookback: env_toml_usize("HTF_LOOKBACK", th.and_then(|h| h.lookback), MIN_CANDLES_FOR_SIGNAL),
 
             htf_ema_period: env_toml_usize("HTF_EMA_PERIOD", th.and_then(|h| h.ema_period), 20),
 
@@ -2157,7 +2157,7 @@ impl Default for AppConfig {
             data_dir: "data".to_string(),
             htf_enabled: false,
             htf_interval: "15m".to_string(),
-            htf_lookback: 50,
+            htf_lookback: MIN_CANDLES_FOR_SIGNAL,
             htf_ema_period: 20,
             adaptive_thresholds: false,
             adaptive_trade_window: 50,

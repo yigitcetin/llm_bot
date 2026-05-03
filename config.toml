@@ -77,7 +77,8 @@ initial_balance = "200"
 [htf]
 enabled = true
 interval = "15m"
-lookback = 50
+# Must be >= MIN_CANDLES_FOR_SIGNAL (100) when HTF is on — see AssetStrategy::validate / constants.
+lookback = 100
 ema_period = 20
 
 [adaptive]
