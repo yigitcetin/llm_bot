@@ -1,5 +1,6 @@
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
+use serde::{Deserialize, Serialize};
 
 /// Active Polymarket prediction market.
 #[derive(Debug, Clone)]
@@ -25,11 +26,23 @@ impl Market {
     }
 }
 
-/// Trade direction.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Trade direction (`YES` / `NO` in TOML and env).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "UPPERCASE")]
 pub enum Direction {
     Yes, // BUY YES token
     No,  // BUY NO token
+}
+
+impl Direction {
+    /// Canonical JSON / log token (`YES` / `NO`).
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Direction::Yes => "YES",
+            Direction::No => "NO",
+        }
+    }
 }
 
 /// Open position tracked in [`crate::risk::RiskManager`] and resolved by [`crate::resolution_checker::ResolutionChecker`].

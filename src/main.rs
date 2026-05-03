@@ -97,7 +97,7 @@ async fn main() -> Result<()> {
     let starting_balance = resolve_starting_balance(&cfg, &executor).await;
     let mut risk = risk::RiskManager::new(&cfg, starting_balance);
     let resolver = resolution_checker::ResolutionChecker::new(http.clone(), &cfg.clob_host);
-    let logger = metrics::MetricsLogger::new(&cfg.data_dir)?;
+    let logger = metrics::MetricsLogger::new(&cfg.data_dir, &cfg.strategy_version)?;
 
     let (fill_tracker, mut fill_rx) = FillTracker::new();
     let mut order_tracker = OrderTracker::new(fill_tracker);
@@ -109,8 +109,11 @@ async fn main() -> Result<()> {
     let mut indicator_cache =
         indicator_cache::IndicatorCache::new(constants::INDICATOR_CACHE_MAX_AGE_SECS);
 
-    let mut shadow_calibrator =
-        ShadowCalibrator::new(&cfg.data_dir, cfg.shadow_calibration.clone());
+    let mut shadow_calibrator = ShadowCalibrator::new(
+        &cfg.data_dir,
+        cfg.shadow_calibration.clone(),
+        &cfg.strategy_version,
+    );
 
     let base_strategies: std::collections::HashMap<String, polymarket_llm_bot::config::AssetStrategy> = cfg
         .assets

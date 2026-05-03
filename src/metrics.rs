@@ -10,8 +10,13 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::fs::OpenOptions;
 use std::io::Write;
+use std::path::Path;
 use tracing::warn;
 
+use crate::fs_atomic;
+use crate::record_enums::{
+    deserialize_opt_cluster_direction, deserialize_opt_fill_status, ClusterDirection, FillStatus,
+};
 use crate::types::Direction;
 
 /// A single trade record for logging and analysis.
@@ -21,7 +26,7 @@ pub struct TradeRecord {
     pub condition_id: String,
     pub asset: String,
     pub duration: String,
-    pub direction: String, // "YES" | "NO"
+    pub direction: Direction,
     pub entry_price: String,
     pub size_usdc: String,
     pub size_shares: String,
@@ -42,8 +47,12 @@ pub struct TradeRecord {
     pub macd_histogram: Option<f64>,
     #[serde(default)]
     pub volume_ratio: Option<f64>,
-    #[serde(default)]
-    pub cluster_direction: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_opt_cluster_direction",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub cluster_direction: Option<ClusterDirection>,
     #[serde(default)]
     pub market_yes_price: Option<String>,
     #[serde(default)]
@@ -84,8 +93,12 @@ pub struct TradeRecord {
     #[serde(default)]
     pub effective_min_edge: Option<String>,
     /// `filled` | `partial` | `expired` when order lifecycle is tracked (GTD); omitted on legacy rows.
-    #[serde(default)]
-    pub fill_status: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_opt_fill_status",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub fill_status: Option<FillStatus>,
     /// When set, this row is a counterfactual (skipped trade) logged to `shadow_trades.jsonl`.
     #[serde(default)]
     pub skip_reason: Option<String>,
@@ -117,6 +130,9 @@ pub struct TradeRecord {
     /// Shadow calibration version active when this trade was placed (`None` = base config).
     #[serde(default)]
     pub calibration_version: Option<u64>,
+    /// Config `[strategy].strategy_version` / `STRATEGY_VERSION` at trade time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strategy_version: Option<String>,
 }
 
 impl TradeRecord {
@@ -139,10 +155,7 @@ impl TradeRecord {
             condition_id,
             asset,
             duration,
-            direction: match direction {
-                Direction::Yes => "YES".to_string(),
-                Direction::No => "NO".to_string(),
-            },
+            direction,
             entry_price: entry_price.to_string(),
             size_usdc: size_usdc.to_string(),
             size_shares: size_shares.to_string(),
@@ -190,6 +203,7 @@ impl TradeRecord {
             multi_tf_direction_agreement: None,
             multi_tf_confidence_adj: None,
             calibration_version: None,
+            strategy_version: None,
         }
     }
 }
@@ -200,10 +214,11 @@ pub struct MetricsLogger {
     shadow_trades_path: String,
     skips_path: String,
     order_failures_path: String,
+    strategy_version: String,
 }
 
 impl MetricsLogger {
-    pub fn new(data_dir: &str) -> Result<Self> {
+    pub fn new(data_dir: &str, strategy_version: &str) -> Result<Self> {
         std::fs::create_dir_all(data_dir)
             .with_context(|| format!("failed to create data directory: {}", data_dir))?;
 
@@ -212,19 +227,29 @@ impl MetricsLogger {
             shadow_trades_path: format!("{}/shadow_trades.jsonl", data_dir),
             skips_path: format!("{}/skip_reasons.jsonl", data_dir),
             order_failures_path: format!("{}/order_failures.jsonl", data_dir),
+            strategy_version: strategy_version.trim().to_string(),
         })
+    }
+
+    fn with_strategy_version(&self, record: &TradeRecord) -> TradeRecord {
+        let mut r = record.clone();
+        r.strategy_version = Some(self.strategy_version.clone());
+        r
     }
 
     /// Log a new trade.
     pub fn log_trade(&self, record: &TradeRecord) -> Result<()> {
-        let json = serde_json::to_string(record).context("failed to serialize trade record")?;
+        let record = self.with_strategy_version(record);
+        let json = serde_json::to_string(&record).context("failed to serialize trade record")?;
 
         self.append_line(&self.trades_path, &json)
     }
 
     /// Log a counterfactual (shadow) trade to `shadow_trades.jsonl` for post-hoc PnL analysis.
     pub fn log_shadow_trade(&self, record: &TradeRecord) -> Result<()> {
-        let json = serde_json::to_string(record).context("failed to serialize shadow trade record")?;
+        let record = self.with_strategy_version(record);
+        let json =
+            serde_json::to_string(&record).context("failed to serialize shadow trade record")?;
 
         self.append_line(&self.shadow_trades_path, &json)
     }
@@ -236,13 +261,13 @@ impl MetricsLogger {
         order_id: &str,
         outcome: bool,
         pnl: Decimal,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let path = &self.trades_path;
         let content = match std::fs::read_to_string(path) {
             Ok(c) => c,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 warn!(path = %path, "trades.jsonl not found; cannot update resolution");
-                return Ok(());
+                return Ok(false);
             }
             Err(e) => {
                 return Err(e).with_context(|| format!("failed to read trades file: {}", path));
@@ -276,21 +301,22 @@ impl MetricsLogger {
         }
 
         if updated {
-            let mut file = std::fs::File::create(path)
-                .with_context(|| format!("failed to rewrite trades file: {}", path))?;
+            let mut body = String::new();
             for line in &lines {
-                writeln!(file, "{}", line)
-                    .with_context(|| format!("failed to write trades file: {}", path))?;
+                body.push_str(line);
+                body.push('\n');
             }
+            fs_atomic::write_path_atomic(Path::new(path), body.as_bytes())
+                .with_context(|| format!("failed to rewrite trades file: {}", path))?;
+            Ok(true)
         } else {
             warn!(
                 condition_id = %condition_id,
                 order_id = %order_id,
                 "no matching unresolved trade in trades.jsonl for resolution update"
             );
+            Ok(false)
         }
-
-        Ok(())
     }
 
     /// Log a skipped-trade decision reason.
@@ -358,13 +384,13 @@ impl MetricsLogger {
         order_id: &str,
         outcome: bool,
         pnl: Decimal,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let path = &self.shadow_trades_path;
         let content = match std::fs::read_to_string(path) {
             Ok(c) => c,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 warn!(path = %path, "shadow_trades.jsonl not found; cannot update resolution");
-                return Ok(());
+                return Ok(false);
             }
             Err(e) => {
                 return Err(e).with_context(|| format!("failed to read shadow trades file: {}", path));
@@ -398,21 +424,22 @@ impl MetricsLogger {
         }
 
         if updated {
-            let mut file = std::fs::File::create(path)
-                .with_context(|| format!("failed to rewrite shadow trades file: {}", path))?;
+            let mut body = String::new();
             for line in &lines {
-                writeln!(file, "{}", line)
-                    .with_context(|| format!("failed to write shadow trades file: {}", path))?;
+                body.push_str(line);
+                body.push('\n');
             }
+            fs_atomic::write_path_atomic(Path::new(path), body.as_bytes())
+                .with_context(|| format!("failed to rewrite shadow trades file: {}", path))?;
+            Ok(true)
         } else {
             warn!(
                 condition_id = %condition_id,
                 order_id = %order_id,
                 "no matching unresolved shadow trade in shadow_trades.jsonl for resolution update"
             );
+            Ok(false)
         }
-
-        Ok(())
     }
 
     fn append_line(&self, path: &str, line: &str) -> Result<()> {
@@ -520,7 +547,7 @@ mod tests {
     fn test_logger_in_temp() -> (MetricsLogger, PathBuf) {
         let dir = std::env::temp_dir().join(format!("metrics_ut_{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&dir).expect("temp dir");
-        let logger = MetricsLogger::new(dir.to_str().expect("utf8 path")).expect("logger");
+        let logger = MetricsLogger::new(dir.to_str().expect("utf8 path"), "1").expect("logger");
         (logger, dir)
     }
 
@@ -558,9 +585,11 @@ mod tests {
         logger.log_trade(&r1).expect("log r1");
         logger.log_trade(&r2).expect("log r2");
 
-        logger
-            .update_trade_resolution("0xc1", "order-a", false, dec!(7.5))
-            .expect("update");
+        assert!(
+            logger
+                .update_trade_resolution("0xc1", "order-a", false, dec!(7.5))
+                .expect("update")
+        );
 
         let path = dir.join("trades.jsonl");
         let content = fs::read_to_string(&path).expect("read trades");
@@ -576,7 +605,9 @@ mod tests {
             .find(|t| t.order_id == "order-a")
             .expect("order-a");
         assert_eq!(t1.outcome, Some(false));
+        assert_eq!(t1.direction, Direction::No);
         assert_eq!(t1.pnl.as_deref(), Some("7.5"));
+        assert_eq!(t1.strategy_version.as_deref(), Some("1"));
         assert!(t1.resolved_at.is_some());
 
         let t2 = rows
@@ -609,9 +640,11 @@ mod tests {
         );
         logger.log_trade(&r).expect("log");
 
-        logger
-            .update_trade_resolution("0xc1", "ord-1", true, dec!(15))
-            .expect("first update");
+        assert!(
+            logger
+                .update_trade_resolution("0xc1", "ord-1", true, dec!(15))
+                .expect("first update")
+        );
         let after_first = fs::read_to_string(dir.join("trades.jsonl")).expect("read");
         let pnl_first: String =
             serde_json::from_str::<TradeRecord>(after_first.lines().next().expect("line"))
@@ -619,9 +652,11 @@ mod tests {
                 .pnl
                 .expect("pnl");
 
-        logger
-            .update_trade_resolution("0xc1", "ord-1", false, dec!(99))
-            .expect("second update noop");
+        assert!(
+            !logger
+                .update_trade_resolution("0xc1", "ord-1", false, dec!(99))
+                .expect("second update noop")
+        );
         let after_second = fs::read_to_string(dir.join("trades.jsonl")).expect("read");
         let pnl_second: String =
             serde_json::from_str::<TradeRecord>(after_second.lines().next().expect("line"))
@@ -635,6 +670,20 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn trade_record_unknown_cluster_direction_becomes_none() {
+        let json = r#"{"timestamp":"2026-01-01T00:00:00Z","condition_id":"0x","asset":"btc","duration":"15m","direction":"NO","entry_price":"0.4","size_usdc":"10","size_shares":"25","signal_probability":"0.55","confidence":"0.7","edge":"0.1","reasoning":"t","order_id":"o1","outcome":null,"pnl":null,"resolved_at":null,"cluster_direction":"weird"}"#;
+        let t: TradeRecord = serde_json::from_str(json).expect("parse");
+        assert!(t.cluster_direction.is_none());
+    }
+
+    #[test]
+    fn trade_record_cluster_direction_case_insensitive() {
+        let json = r#"{"timestamp":"2026-01-01T00:00:00Z","condition_id":"0x","asset":"btc","duration":"15m","direction":"NO","entry_price":"0.4","size_usdc":"10","size_shares":"25","signal_probability":"0.55","confidence":"0.7","edge":"0.1","reasoning":"t","order_id":"o1","outcome":null,"pnl":null,"resolved_at":null,"cluster_direction":"tie"}"#;
+        let t: TradeRecord = serde_json::from_str(json).expect("parse");
+        assert_eq!(t.cluster_direction, Some(ClusterDirection::Tie));
     }
 
     #[test]
@@ -661,20 +710,23 @@ mod tests {
             "r".to_string(),
             "ord-fs".to_string(),
         );
-        r.fill_status = Some("partial".to_string());
+        r.fill_status = Some(FillStatus::Partial);
         let json = serde_json::to_string(&r).expect("serialize");
         let back: TradeRecord = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(back.fill_status.as_deref(), Some("partial"));
+        assert_eq!(back.direction, Direction::Yes);
+        assert_eq!(back.fill_status, Some(FillStatus::Partial));
     }
 
     #[test]
-    fn update_trade_resolution_missing_trades_file_returns_ok() {
+    fn update_trade_resolution_missing_trades_file_returns_false() {
         let dir = std::env::temp_dir().join(format!("metrics_ut_nf_{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&dir).expect("temp dir");
-        let logger = MetricsLogger::new(dir.to_str().expect("path")).expect("logger");
-        logger
-            .update_trade_resolution("x", "y", true, dec!(1))
-            .expect("missing trades.jsonl should not error");
+        let logger = MetricsLogger::new(dir.to_str().expect("path"), "1").expect("logger");
+        assert!(
+            !logger
+                .update_trade_resolution("x", "y", true, dec!(1))
+                .expect("missing trades.jsonl returns false")
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -699,9 +751,11 @@ mod tests {
         r.question = Some("Bitcoin Up or Down - April 11, 8:00AM-8:15AM ET".to_string());
         logger.log_shadow_trade(&r).expect("log shadow");
 
-        logger
-            .update_shadow_trade_resolution("0xshadow", "shadow-abc", true, dec!(5))
-            .expect("update shadow");
+        assert!(
+            logger
+                .update_shadow_trade_resolution("0xshadow", "shadow-abc", true, dec!(5))
+                .expect("update shadow")
+        );
 
         let path = dir.join("shadow_trades.jsonl");
         let line = fs::read_to_string(&path).expect("read shadow");
@@ -710,6 +764,7 @@ mod tests {
         assert_eq!(t.pnl.as_deref(), Some("5"));
         assert!(t.resolved_at.is_some());
         assert_eq!(t.skip_reason.as_deref(), Some("edge_too_small"));
+        assert_eq!(t.strategy_version.as_deref(), Some("1"));
 
         let _ = fs::remove_dir_all(&dir);
     }

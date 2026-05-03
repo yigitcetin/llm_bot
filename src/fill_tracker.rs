@@ -53,7 +53,7 @@ impl FillTracker {
         self.inner
             .last_seen
             .lock()
-            .expect("fill_tracker lock")
+            .unwrap_or_else(|e| e.into_inner())
             .get(order_id)
             .copied()
             .unwrap_or(Decimal::ZERO)
@@ -61,7 +61,11 @@ impl FillTracker {
 
     /// Record cumulative fill without broadcasting (poll path before WS duplicate).
     pub fn mark_seen(&self, order_id: &str, cumulative_size: Decimal) {
-        let mut map = self.inner.last_seen.lock().expect("fill_tracker lock");
+        let mut map = self
+            .inner
+            .last_seen
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let prev = map.get(order_id).copied().unwrap_or(Decimal::ZERO);
         if cumulative_size > prev {
             map.insert(order_id.to_string(), cumulative_size);
@@ -79,7 +83,11 @@ impl FillTracker {
             return;
         }
 
-        let mut map = self.inner.last_seen.lock().expect("fill_tracker lock");
+        let mut map = self
+            .inner
+            .last_seen
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let prev = map.get(order_id).copied().unwrap_or(Decimal::ZERO);
         let delta = size_matched - prev;
         if delta > Decimal::ZERO {

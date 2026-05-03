@@ -12,7 +12,7 @@ pub enum MarketType {
 }
 
 /// Parse market question to determine type
-pub fn parse_market_question(question: &str) -> MarketType {
+pub(crate) fn parse_market_question(question: &str) -> MarketType {
     let q = question.to_lowercase();
 
     // UP/Higher/Above patterns
@@ -88,6 +88,7 @@ pub fn match_signal_to_market(signal: &TechnicalSignal, market: &Market) -> Opti
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::record_enums::ClusterDirection;
     use rust_decimal_macros::dec;
 
     #[test]
@@ -154,7 +155,7 @@ mod tests {
             rsi: 50.0,
             macd_histogram: 0.0,
             volume_ratio: 1.0,
-            cluster_direction: "TIE".to_string(),
+            cluster_direction: ClusterDirection::Tie,
             momentum_5m: 0.0,
             momentum_15m: 0.0,
             taker_buy_ratio: None,

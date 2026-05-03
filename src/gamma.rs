@@ -46,7 +46,7 @@ pub struct GammaToken {
 }
 
 /// Parse YES and NO prices from Gamma `tokens` and/or stringified `outcomes` + `outcomePrices` JSON arrays.
-pub fn parse_yes_no_prices(
+pub(crate) fn parse_yes_no_prices(
     tokens: Option<&[GammaToken]>,
     outcomes: Option<&str>,
     outcome_prices: Option<&str>,

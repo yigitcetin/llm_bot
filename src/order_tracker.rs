@@ -13,6 +13,7 @@ use crate::execution::{Executor, OrderPollResult, PlaceOrderOutcome};
 use crate::fill_tracker::{FillResult, FillTracker};
 use crate::metrics::{MetricsLogger, TradeRecord};
 use crate::prometheus_export;
+use crate::record_enums::{ClusterDirection, FillStatus};
 use crate::risk::RiskManager;
 use crate::types::{Direction, OpenPosition};
 use polymarket_client_sdk::clob::types::OrderStatusType;
@@ -36,7 +37,7 @@ pub struct PendingTradeMeta {
     pub rsi: Option<f64>,
     pub macd_histogram: Option<f64>,
     pub volume_ratio: Option<f64>,
-    pub cluster_direction: Option<String>,
+    pub cluster_direction: Option<ClusterDirection>,
     pub market_yes_price: Option<String>,
     pub liquidity: Option<String>,
     pub secs_to_close: Option<i64>,
@@ -56,6 +57,12 @@ pub struct PendingTradeMeta {
     pub question: Option<String>,
     pub slippage_bps: Option<String>,
     pub effective_min_edge: Option<String>,
+    /// Multi-TF agreement snapshot at order time (same as immediate-fill `TradeRecord` fields).
+    pub multi_tf_direction_agreement: Option<bool>,
+    pub multi_tf_confidence_adj: Option<String>,
+    pub calibration_version: Option<u64>,
+    pub adaptive_penalty_applied: Option<String>,
+    pub direction_wr_at_trade: Option<String>,
 }
 
 /// One resting GTD order we are tracking until fill, cancel, or timeout.
@@ -96,6 +103,7 @@ impl OrderTracker {
             .collect()
     }
 
+    #[cfg(test)]
     pub fn has_pending(&self) -> bool {
         !self.pending.is_empty()
     }
@@ -137,11 +145,14 @@ impl OrderTracker {
         };
 
         if is_full {
-            let done = self
-                .pending
-                .remove(&order_id)
-                .expect("pending order must exist");
-            self.confirm_full_fill(done, risk, logger)?;
+            if let Some(done) = self.pending.remove(&order_id) {
+                self.confirm_full_fill(done, risk, logger)?;
+            } else {
+                warn!(
+                    order_id = %order_id,
+                    "full fill reported but pending order already removed (duplicate WS?)"
+                );
+            }
         } else if cum_for_log > Decimal::ZERO {
             info!(
                 order_id = %order_id,
@@ -159,7 +170,7 @@ impl OrderTracker {
         risk: &mut RiskManager,
         logger: &MetricsLogger,
     ) -> Result<()> {
-        let record = build_trade_record(&p, "filled");
+        let record = build_trade_record(&p, FillStatus::Filled);
         let _ = logger.log_trade(&record);
 
         if !record.order_id.starts_with("dry-run-") {
@@ -234,8 +245,14 @@ impl OrderTracker {
             if matches!(polled.status, OrderStatusType::Matched)
                 || (polled.size_matched >= original_shares && original_shares > Decimal::ZERO)
             {
-                let done = self.pending.remove(&oid).expect("key exists");
-                self.confirm_full_fill(done, risk, logger)?;
+                if let Some(done) = self.pending.remove(&oid) {
+                    self.confirm_full_fill(done, risk, logger)?;
+                } else {
+                    warn!(
+                        order_id = %oid,
+                        "REST matched but pending order already removed"
+                    );
+                }
                 continue;
             }
 
@@ -255,8 +272,14 @@ impl OrderTracker {
                 if let Some(ref po) = polled_after {
                     self.fill_tracker.mark_seen(&oid, po.size_matched);
                     if po.size_matched >= original_shares * dec!(0.99) {
-                        let done = self.pending.remove(&oid).expect("key exists");
-                        self.confirm_full_fill(done, risk, logger)?;
+                        if let Some(done) = self.pending.remove(&oid) {
+                            self.confirm_full_fill(done, risk, logger)?;
+                        } else {
+                            warn!(
+                                order_id = %oid,
+                                "post-cancel poll shows full fill but pending order already removed"
+                            );
+                        }
                         continue;
                     }
                 }
@@ -281,7 +304,7 @@ impl OrderTracker {
         if polled.size_matched >= MIN_SHARES {
             let actual_shares = polled.size_matched.min(p.original_shares);
             let actual_usdc = actual_shares * polled.price;
-            let mut record = build_trade_record(&p, "partial");
+            let mut record = build_trade_record(&p, FillStatus::Partial);
             record.entry_price = polled.price.to_string();
             record.size_usdc = actual_usdc.to_string();
             record.size_shares = actual_shares.to_string();
@@ -301,7 +324,7 @@ impl OrderTracker {
             );
         } else {
             risk.release_reservation(&p.condition_id);
-            let mut record = build_trade_record(&p, "expired");
+            let mut record = build_trade_record(&p, FillStatus::Expired);
             record.size_usdc = Decimal::ZERO.to_string();
             record.size_shares = Decimal::ZERO.to_string();
             let _ = logger.log_trade(&record);
@@ -328,7 +351,7 @@ impl OrderTracker {
             let price = polled_after.map(|x| x.price).unwrap_or(p.meta.limit_price);
             let actual_shares = matched.min(p.original_shares);
             let actual_usdc = actual_shares * price;
-            let mut record = build_trade_record(&p, "partial");
+            let mut record = build_trade_record(&p, FillStatus::Partial);
             record.size_usdc = actual_usdc.to_string();
             record.size_shares = actual_shares.to_string();
             record.entry_price = price.to_string();
@@ -348,7 +371,7 @@ impl OrderTracker {
             );
         } else {
             risk.release_reservation(&p.condition_id);
-            let mut record = build_trade_record(&p, "expired");
+            let mut record = build_trade_record(&p, FillStatus::Expired);
             record.size_usdc = Decimal::ZERO.to_string();
             record.size_shares = Decimal::ZERO.to_string();
             let _ = logger.log_trade(&record);
@@ -357,7 +380,7 @@ impl OrderTracker {
     }
 }
 
-fn build_trade_record(p: &PendingOrder, fill_status: &str) -> TradeRecord {
+fn build_trade_record(p: &PendingOrder, fill_status: FillStatus) -> TradeRecord {
     let mut r = TradeRecord::new(
         p.condition_id.clone(),
         p.meta.asset.clone(),
@@ -375,7 +398,7 @@ fn build_trade_record(p: &PendingOrder, fill_status: &str) -> TradeRecord {
     r.rsi = p.meta.rsi;
     r.macd_histogram = p.meta.macd_histogram;
     r.volume_ratio = p.meta.volume_ratio;
-    r.cluster_direction = p.meta.cluster_direction.clone();
+    r.cluster_direction = p.meta.cluster_direction;
     r.market_yes_price = p.meta.market_yes_price.clone();
     r.liquidity = p.meta.liquidity.clone();
     r.secs_to_close = p.meta.secs_to_close;
@@ -395,7 +418,12 @@ fn build_trade_record(p: &PendingOrder, fill_status: &str) -> TradeRecord {
     r.question = p.meta.question.clone();
     r.slippage_bps = p.meta.slippage_bps.clone();
     r.effective_min_edge = p.meta.effective_min_edge.clone();
-    r.fill_status = Some(fill_status.to_string());
+    r.multi_tf_direction_agreement = p.meta.multi_tf_direction_agreement;
+    r.multi_tf_confidence_adj = p.meta.multi_tf_confidence_adj.clone();
+    r.calibration_version = p.meta.calibration_version;
+    r.adaptive_penalty_applied = p.meta.adaptive_penalty_applied.clone();
+    r.direction_wr_at_trade = p.meta.direction_wr_at_trade.clone();
+    r.fill_status = Some(fill_status);
     r
 }
 
@@ -428,7 +456,7 @@ mod tests {
     fn test_logger() -> (MetricsLogger, std::path::PathBuf) {
         let dir = std::env::temp_dir().join(format!("order_tracker_ut_{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&dir).expect("temp dir");
-        let logger = MetricsLogger::new(dir.to_str().expect("utf8 path")).expect("logger");
+        let logger = MetricsLogger::new(dir.to_str().expect("utf8 path"), "1").expect("logger");
         (logger, dir)
     }
 
@@ -467,6 +495,11 @@ mod tests {
             question: None,
             slippage_bps: None,
             effective_min_edge: None,
+            multi_tf_direction_agreement: None,
+            multi_tf_confidence_adj: None,
+            calibration_version: None,
+            adaptive_penalty_applied: None,
+            direction_wr_at_trade: None,
         }
     }
 

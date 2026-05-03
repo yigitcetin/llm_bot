@@ -6,7 +6,9 @@ use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 
 use crate::config_toml::{AssetOverride, TomlRoot};
-use crate::constants::{GAMMA_TAG_ID_DEFAULT, MIN_LIQUIDITY_USDC, SLIPPAGE_BPS};
+use crate::constants::{
+    GAMMA_TAG_ID_DEFAULT, MIN_CANDLES_FOR_SIGNAL, MIN_LIQUIDITY_USDC, SLIPPAGE_BPS,
+};
 use crate::shadow_calibrator::ShadowCalibrationConfig;
 use crate::signals::SignalConfig;
 use crate::types::Direction;
@@ -29,6 +31,8 @@ pub struct AppConfig {
     pub min_order_usdc_floor: Decimal,
     /// Slippage fraction added to reference token price (e.g. `0.002` = 0.2%). Also used as CLOB worst-price limit.
     pub slippage_bps: Decimal,
+    /// User-defined label for grouping trades and persisted state across config releases.
+    pub strategy_version: String,
 
     // Technical Analysis
     pub spot_exchange: String,   // "binance", "coinbase", etc.
@@ -319,6 +323,13 @@ impl AssetStrategy {
                 self.macd_slow
             );
         }
+        if self.macd_signal == 0 || self.macd_signal >= self.macd_slow {
+            anyhow::bail!(
+                "MACD_SIGNAL_* must be in 1..MACD_SLOW_* (got signal={}, slow={})",
+                self.macd_signal,
+                self.macd_slow
+            );
+        }
         if self.candle_lookback < 50 {
             anyhow::bail!(
                 "CANDLE_LOOKBACK_* too low (min 50), got: {}",
@@ -443,6 +454,47 @@ impl AssetStrategy {
                     "MAX_SECS_TO_CLOSE_* ({}) must be > MIN_SECS_TO_CLOSE_* ({}) when both are set",
                     hi,
                     lo
+                );
+            }
+        }
+        if let Some(s) = self.expiry_dampen_last_secs {
+            if s < 0 {
+                anyhow::bail!("EXPIRY_DAMPEN_LAST_SECS_* must be >= 0 when set, got {}", s);
+            }
+            if s > 86_400 * 2 {
+                anyhow::bail!(
+                    "EXPIRY_DAMPEN_LAST_SECS_* unreasonably large (>2 days), got {}",
+                    s
+                );
+            }
+        }
+        if self.htf_enabled {
+            if self.htf_interval.trim().is_empty() {
+                anyhow::bail!("HTF_INTERVAL_* must be non-empty when HTF_ENABLED is true");
+            }
+            if self.htf_lookback < MIN_CANDLES_FOR_SIGNAL {
+                anyhow::bail!(
+                    "HTF_LOOKBACK_* must be >= {} when HTF is enabled, got {}",
+                    MIN_CANDLES_FOR_SIGNAL,
+                    self.htf_lookback
+                );
+            }
+            if self.htf_ema_period < 2 || self.htf_ema_period > 500 {
+                anyhow::bail!(
+                    "HTF_EMA_PERIOD_* must be in [2, 500], got {}",
+                    self.htf_ema_period
+                );
+            }
+        }
+        if self.multi_tf_enabled {
+            if self.multi_tf_interval.trim().is_empty() {
+                anyhow::bail!("MULTI_TF_INTERVAL_* must be non-empty when MULTI_TF_ENABLED is true");
+            }
+            if self.multi_tf_lookback < MIN_CANDLES_FOR_SIGNAL {
+                anyhow::bail!(
+                    "MULTI_TF_LOOKBACK_* must be >= {} when multi-TF is enabled, got {}",
+                    MIN_CANDLES_FOR_SIGNAL,
+                    self.multi_tf_lookback
                 );
             }
         }
@@ -812,7 +864,7 @@ fn parse_direction_str(s: &str) -> Option<Direction> {
 fn blocked_direction_for_asset(
     su: &str,
     asset: Option<&AssetOverride>,
-    strategy_blocked: Option<&str>,
+    strategy_blocked: Option<Direction>,
 ) -> Option<Direction> {
     let k = format!("BLOCKED_DIRECTION_{su}");
     if let Ok(v) = std::env::var(&k) {
@@ -823,10 +875,8 @@ fn blocked_direction_for_asset(
         }
     }
     if let Some(sec) = asset {
-        if let Some(ref s) = sec.blocked_direction {
-            if let Some(d) = parse_direction_str(s) {
-                return Some(d);
-            }
+        if let Some(d) = sec.blocked_direction {
+            return Some(d);
         }
     }
     if let Ok(v) = std::env::var("BLOCKED_DIRECTION") {
@@ -836,7 +886,7 @@ fn blocked_direction_for_asset(
             }
         }
     }
-    strategy_blocked.and_then(parse_direction_str)
+    strategy_blocked
 }
 
 fn vol_std_with_toml(
@@ -958,6 +1008,17 @@ impl AppConfig {
                 parse_dec_str(&ts.and_then(|s| s.slippage_bps.clone())),
                 SLIPPAGE_BPS,
             ),
+
+            strategy_version: std::env::var("STRATEGY_VERSION")
+                .ok()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .or_else(|| {
+                    ts.and_then(|s| s.strategy_version.clone())
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                })
+                .unwrap_or_else(|| "1".to_string()),
 
             spot_exchange: env_toml_string(
                 "SPOT_EXCHANGE",
@@ -1404,11 +1465,6 @@ impl AppConfig {
         Ok(config)
     }
 
-    /// Same as [`Self::load`]. Kept for callers that historically used env-only loading.
-    pub fn from_env() -> Result<Self> {
-        Self::load()
-    }
-
     /// Effective strategy for `asset` (global env + `KEY_{ASSET}` overrides + optional `config.toml` per asset).
     pub fn asset_strategy(&self, asset: &str) -> AssetStrategy {
         let su = asset_upper_suffix(asset);
@@ -1714,7 +1770,7 @@ impl AppConfig {
                 self.toml
                     .as_deref()
                     .and_then(|t| t.strategy.as_ref())
-                    .and_then(|s| s.blocked_direction.as_deref()),
+                    .and_then(|s| s.blocked_direction),
             ),
             dynamic_momentum_threshold: env_toml_asset_bool(
                 "DYNAMIC_MOMENTUM_THRESHOLD",
@@ -1842,6 +1898,10 @@ impl AppConfig {
                 "MIN_CONFIDENCE must be between 0.5 and 1.0, got: {}",
                 self.min_confidence
             );
+        }
+
+        if self.strategy_version.trim().is_empty() {
+            anyhow::bail!("STRATEGY_VERSION / [strategy].strategy_version must not be empty");
         }
 
         if self.max_position_pct <= Decimal::ZERO {
@@ -2068,6 +2128,7 @@ impl Default for AppConfig {
             min_order_usdc: dec!(5),
             min_order_usdc_floor: dec!(2),
             slippage_bps: SLIPPAGE_BPS,
+            strategy_version: "1".to_string(),
             spot_exchange: "binance".to_string(),
             candle_interval: "1m".to_string(),
             candle_lookback: 100,
@@ -2173,6 +2234,13 @@ mod tests {
         c.polymarket_private_key =
             "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string();
         c
+    }
+
+    #[test]
+    fn app_config_rejects_empty_strategy_version() {
+        let mut c = valid_app_config();
+        c.strategy_version = "   ".to_string();
+        assert!(c.validate().is_err());
     }
 
     #[test]

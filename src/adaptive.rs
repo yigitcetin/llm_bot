@@ -4,6 +4,7 @@ use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 
 use crate::metrics::{read_trades_from_path, TradeRecord};
+use crate::types::Direction;
 
 /// Sum of realized PnL for this asset over the adaptive window below this (USDC) triggers extra tightening.
 const PNL_CIRCUIT_THRESHOLD_USDC: f64 = -10.0;
@@ -100,7 +101,7 @@ pub fn effective_thresholds(
 pub fn adaptive_direction_penalty(
     trades_path: &str,
     asset: &str,
-    direction_str: &str,
+    trade_direction: Direction,
     base_penalty: f64,
     window: usize,
     enabled: bool,
@@ -116,7 +117,9 @@ pub fn adaptive_direction_penalty(
 
     let mut dir_trades: Vec<&TradeRecord> = trades
         .iter()
-        .filter(|t| t.asset == asset && t.direction == direction_str && t.outcome.is_some())
+        .filter(|t| {
+            t.asset == asset && t.direction == trade_direction && t.outcome.is_some()
+        })
         .collect();
     if dir_trades.len() > window {
         dir_trades = dir_trades[dir_trades.len() - window..].to_vec();
@@ -179,10 +182,10 @@ fn trade_won(t: &TradeRecord) -> bool {
     let Some(outcome) = t.outcome else {
         return false;
     };
-    match (t.direction.as_str(), outcome) {
-        ("YES", true) | ("NO", false) => true,
-        _ => false,
-    }
+    matches!(
+        (t.direction, outcome),
+        (Direction::Yes, true) | (Direction::No, false)
+    )
 }
 
 #[cfg(test)]
@@ -255,7 +258,7 @@ mod tests {
         let (pen, wr) = adaptive_direction_penalty(
             p.to_str().unwrap(),
             "btc",
-            "YES",
+            Direction::Yes,
             0.08,
             50,
             true,
@@ -279,7 +282,7 @@ mod tests {
         let (pen, wr) = adaptive_direction_penalty(
             p.to_str().unwrap(),
             "sol",
-            "YES",
+            Direction::Yes,
             0.08,
             50,
             true,

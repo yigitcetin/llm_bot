@@ -18,7 +18,7 @@ use tracing::{info, warn};
 use crate::gamma::parse_close_time_from_question;
 use crate::metrics::MetricsLogger;
 use crate::risk::RiskManager;
-use crate::types::{Direction, OpenPosition};
+use crate::types::OpenPosition;
 
 /// CLOB API market payload for `GET /markets/{condition_id}`.
 #[derive(Debug, Deserialize)]
@@ -71,16 +71,30 @@ impl ResolutionChecker {
                 Ok(Some(yes_won)) => {
                     let pnl = pos.pnl_on_resolution(yes_won);
 
-                    risk.record_resolution(pos, pnl);
-
-                    if let Err(e) = logger.update_trade_resolution(
+                    // Persist JSONL first so a failed write does not leave an in-memory resolution
+                    // without a matching row (avoids double credit via credit_file_resolution later).
+                    match logger.update_trade_resolution(
                         &pos.condition_id,
                         &pos.order_id,
                         yes_won,
                         pnl,
                     ) {
-                        warn!(error = %e, "failed to update trade resolution in trades.jsonl");
+                        Err(e) => {
+                            warn!(error = %e, "failed to update trade resolution in trades.jsonl — skipping in-memory settlement");
+                            continue;
+                        }
+                        Ok(false) => {
+                            warn!(
+                                condition_id = %pos.condition_id,
+                                order_id = %pos.order_id,
+                                "no matching unresolved trades.jsonl row — skipping in-memory settlement (balance not updated)"
+                            );
+                            continue;
+                        }
+                        Ok(true) => {}
                     }
+
+                    risk.record_resolution(pos, pnl);
 
                     info!(
                         condition_id = %pos.condition_id,
@@ -155,11 +169,7 @@ impl ResolutionChecker {
 
             match self.fetch_market_result(&trade.condition_id).await {
                 Ok(Some(yes_won)) => {
-                    let direction = if trade.direction == "YES" {
-                        Direction::Yes
-                    } else {
-                        Direction::No
-                    };
+                    let direction = trade.direction;
                     let entry_price: Decimal =
                         trade.entry_price.parse().unwrap_or(Decimal::ZERO);
                     let size_usdc: Decimal =
@@ -179,28 +189,38 @@ impl ResolutionChecker {
 
                     let pnl = pos.pnl_on_resolution(yes_won);
 
-                    if let Err(e) = logger.update_trade_resolution(
+                    match logger.update_trade_resolution(
                         &trade.condition_id,
                         &trade.order_id,
                         yes_won,
                         pnl,
                     ) {
-                        warn!(error = %e, "failed to update trade resolution");
-                    } else {
-                        // Credit the balance even if the position isn't in-memory
-                        // (restart scenario: balance was persisted with the deduction).
-                        if risk.has_position(&trade.condition_id) {
-                            risk.record_resolution(&pos, pnl);
-                        } else {
-                            risk.credit_file_resolution(pos.size_usdc, pnl);
+                        Err(e) => {
+                            warn!(error = %e, "failed to update trade resolution");
                         }
-                        info!(
-                            condition_id = %trade.condition_id,
-                            yes_won,
-                            pnl = %pnl,
-                            "trade resolved from file"
-                        );
-                        resolved_count += 1;
+                        Ok(false) => {
+                            warn!(
+                                condition_id = %trade.condition_id,
+                                order_id = %trade.order_id,
+                                "trades.jsonl row not updated — not crediting balance"
+                            );
+                        }
+                        Ok(true) => {
+                            // Credit the balance even if the position isn't in-memory
+                            // (restart scenario: balance was persisted with the deduction).
+                            if risk.has_position(&trade.condition_id) {
+                                risk.record_resolution(&pos, pnl);
+                            } else {
+                                risk.credit_file_resolution(pos.size_usdc, pnl);
+                            }
+                            info!(
+                                condition_id = %trade.condition_id,
+                                yes_won,
+                                pnl = %pnl,
+                                "trade resolved from file"
+                            );
+                            resolved_count += 1;
+                        }
                     }
                 }
                 Ok(None) => {
@@ -264,11 +284,7 @@ impl ResolutionChecker {
 
             match self.fetch_market_result(&trade.condition_id).await {
                 Ok(Some(yes_won)) => {
-                    let direction = if trade.direction == "YES" {
-                        Direction::Yes
-                    } else {
-                        Direction::No
-                    };
+                    let direction = trade.direction;
                     let entry_price: Decimal = trade.entry_price.parse().unwrap_or(Decimal::ZERO);
                     let size_usdc: Decimal = trade.size_usdc.parse().unwrap_or(Decimal::ZERO);
                     let size_shares: Decimal = trade.size_shares.parse().unwrap_or(Decimal::ZERO);
@@ -285,21 +301,31 @@ impl ResolutionChecker {
 
                     let pnl = pos.pnl_on_resolution(yes_won);
 
-                    if let Err(e) = logger.update_shadow_trade_resolution(
+                    match logger.update_shadow_trade_resolution(
                         &trade.condition_id,
                         &trade.order_id,
                         yes_won,
                         pnl,
                     ) {
-                        warn!(error = %e, "failed to update shadow trade resolution");
-                    } else {
-                        info!(
-                            condition_id = %trade.condition_id,
-                            yes_won,
-                            pnl = %pnl,
-                            "shadow trade resolved from file"
-                        );
-                        resolved_count += 1;
+                        Err(e) => {
+                            warn!(error = %e, "failed to update shadow trade resolution");
+                        }
+                        Ok(false) => {
+                            warn!(
+                                condition_id = %trade.condition_id,
+                                order_id = %trade.order_id,
+                                "shadow_trades.jsonl row not updated — resolution not recorded"
+                            );
+                        }
+                        Ok(true) => {
+                            info!(
+                                condition_id = %trade.condition_id,
+                                yes_won,
+                                pnl = %pnl,
+                                "shadow trade resolved from file"
+                            );
+                            resolved_count += 1;
+                        }
                     }
                 }
                 Ok(None) => {

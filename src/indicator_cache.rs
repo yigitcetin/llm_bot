@@ -96,7 +96,8 @@ impl IndicatorCache {
         });
     }
 
-    /// Get cache stats for monitoring
+    /// Get cache stats for monitoring (used by unit tests).
+    #[cfg(test)]
     pub fn stats(&self) -> CacheStats {
         CacheStats {
             size: self.cache.len(),

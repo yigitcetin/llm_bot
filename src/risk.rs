@@ -1,11 +1,13 @@
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
+use anyhow::Context;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
 use tracing::{info, warn};
 
 use crate::config::AppConfig;
+use crate::fs_atomic;
 use crate::types::OpenPosition;
 
 /// Persisted balance snapshot written to `data/balance_state.json`.
@@ -13,6 +15,9 @@ use crate::types::OpenPosition;
 struct BalanceState {
     balance: Decimal,
     updated_at: chrono::DateTime<chrono::Utc>,
+    /// `AppConfig.strategy_version` when this snapshot was written (`None` in legacy files).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    strategy_version: Option<String>,
 }
 
 const BALANCE_STATE_FILE: &str = "balance_state.json";
@@ -49,6 +54,7 @@ pub struct RiskManager {
     last_reset: chrono::NaiveDate,
     /// Directory for `balance_state.json`; `None` disables persistence (e.g. tests).
     data_dir: Option<PathBuf>,
+    strategy_version: String,
 }
 
 /// [`data/balance_state.json`] if valid, otherwise [`AppConfig::initial_balance`].
@@ -79,6 +85,7 @@ impl RiskManager {
             reserved_markets: HashSet::new(),
             last_reset: chrono::Utc::now().date_naive(),
             data_dir: Some(data_dir),
+            strategy_version: cfg.strategy_version.trim().to_string(),
         };
         rm.persist_balance();
         rm
@@ -96,13 +103,14 @@ impl RiskManager {
             reserved_markets: HashSet::new(),
             last_reset: chrono::Utc::now().date_naive(),
             data_dir: None,
+            strategy_version: cfg.strategy_version.trim().to_string(),
         }
     }
 
     /// Persist current balance to `data/balance_state.json`.
     fn persist_balance(&self) {
         let Some(dir) = &self.data_dir else { return };
-        if let Err(e) = save_balance_state(dir, self.balance) {
+        if let Err(e) = save_balance_state(dir, self.balance, &self.strategy_version) {
             warn!(error = %e, "failed to persist balance state");
         }
     }
@@ -285,17 +293,16 @@ fn load_balance_state(data_dir: &Path) -> Option<Decimal> {
     Some(state.balance)
 }
 
-fn save_balance_state(data_dir: &Path, balance: Decimal) -> anyhow::Result<()> {
+fn save_balance_state(data_dir: &Path, balance: Decimal, strategy_version: &str) -> anyhow::Result<()> {
     let state = BalanceState {
         balance,
         updated_at: chrono::Utc::now(),
+        strategy_version: Some(strategy_version.trim().to_string()),
     };
     let json = serde_json::to_string_pretty(&state)?;
     let path = balance_state_path(data_dir);
-    // Atomic write: write to temp file then rename to avoid partial reads.
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, json.as_bytes())?;
-    std::fs::rename(&tmp, &path)?;
+    fs_atomic::write_path_atomic(&path, json.as_bytes())
+        .context("atomic write balance_state.json")?;
     Ok(())
 }
 
@@ -451,7 +458,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("risk_test_{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("mkdir");
         let balance = dec!(548.94);
-        save_balance_state(&dir, balance).expect("save");
+        save_balance_state(&dir, balance, "1").expect("save");
         let loaded = load_balance_state(&dir).expect("load");
         assert_eq!(loaded, balance);
         let _ = std::fs::remove_dir_all(&dir);
@@ -469,7 +476,7 @@ mod tests {
     fn persisted_or_config_balance_prefers_file() {
         let dir = std::env::temp_dir().join(format!("risk_persist_cfg_{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("mkdir");
-        save_balance_state(&dir, dec!(333.12)).expect("save");
+        save_balance_state(&dir, dec!(333.12), "1").expect("save");
 
         let mut cfg = test_cfg();
         cfg.data_dir = dir.to_string_lossy().into_owned();

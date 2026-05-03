@@ -4,6 +4,7 @@
 
 use anyhow::{Context, Result};
 use polymarket_llm_bot::metrics::{read_trades_from_path, TradeRecord};
+use polymarket_llm_bot::types::Direction;
 use rust_decimal::Decimal;
 use std::collections::BTreeMap;
 
@@ -69,7 +70,7 @@ fn main() -> Result<()> {
     print_summary(&trades);
     by_key(&trades, "asset", |t| t.asset.clone());
     by_key(&trades, "duration", |t| t.duration.clone());
-    by_key(&trades, "direction", |t| t.direction.clone());
+    by_key(&trades, "direction", |t| t.direction.as_str().to_string());
     edge_buckets(&trades);
     confidence_buckets(&trades);
     telemetry_buckets(&trades);
@@ -78,7 +79,7 @@ fn main() -> Result<()> {
     for t in trades.iter().rev().take(recent_n) {
         println!(
             "{} | {} {} | edge={} conf={} | outcome={:?} pnl={:?}",
-            t.timestamp, t.asset, t.direction, t.edge, t.confidence, t.outcome, t.pnl
+            t.timestamp, t.asset, t.direction.as_str(), t.edge, t.confidence, t.outcome, t.pnl
         );
     }
 
@@ -92,8 +93,8 @@ fn parse_dec(s: &str) -> Option<Decimal> {
 fn trade_won(t: &TradeRecord) -> Option<bool> {
     let outcome = t.outcome?;
     Some(matches!(
-        (t.direction.as_str(), outcome),
-        ("YES", true) | ("NO", false)
+        (t.direction, outcome),
+        (Direction::Yes, true) | (Direction::No, false)
     ))
 }
 

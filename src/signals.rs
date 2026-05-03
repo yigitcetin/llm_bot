@@ -5,6 +5,7 @@ use rust_decimal_macros::dec;
 use tracing::debug;
 
 use crate::constants::MIN_CANDLES_FOR_SIGNAL;
+use crate::record_enums::ClusterDirection;
 use crate::spot_price::Candle;
 
 /// Teknik sinyal üretilemediğinde (düşük hacim, berabere oy vb.).
@@ -44,7 +45,7 @@ pub struct TechnicalSignal {
     /// Last-bar volume / rolling average (see `compute_volume_ratio`).
     pub volume_ratio: f64,
     /// RSI+momentum cluster vote: `UP`, `DOWN`, or `TIE` when votes tie / no majority.
-    pub cluster_direction: String,
+    pub cluster_direction: ClusterDirection,
     /// 5-bar momentum (fractional return) used in cluster vote and probability scaling.
     pub momentum_5m: f64,
     /// 15-bar momentum (fractional return) used in cluster vote.
@@ -399,9 +400,9 @@ pub fn generate_signal(candles: &[Candle], config: &SignalConfig) -> SignalResul
     );
 
     let cluster_direction = match cluster_dir {
-        Some(SignalDirection::Up) => "UP".to_string(),
-        Some(SignalDirection::Down) => "DOWN".to_string(),
-        None => "TIE".to_string(),
+        Some(SignalDirection::Up) => ClusterDirection::Up,
+        Some(SignalDirection::Down) => ClusterDirection::Down,
+        None => ClusterDirection::Tie,
     };
 
     let taker_buy_ratio = candles.last().and_then(|c| c.taker_buy_ratio);

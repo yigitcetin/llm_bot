@@ -19,6 +19,7 @@ use crate::market_matcher;
 use crate::metrics::{MetricsLogger, OrderFailureRecord, SkipRecord, TradeRecord};
 use crate::order_tracker::{pending_from_outcome, OrderTracker, PendingTradeMeta};
 use crate::prometheus_export;
+use crate::record_enums::{ClusterDirection, FillStatus};
 use crate::risk::{RiskManager, TradeBlockReason};
 use crate::signal_extensions::{
     above_max_secs_to_close, apply_market_timing_to_signal, below_min_secs_to_close,
@@ -63,7 +64,7 @@ fn compute_edge_min_for_trade_cluster(
     {
         mult_total *= st.mid_price_band_min_edge_multiplier;
     }
-    if signal.cluster_direction == "TIE" {
+    if signal.cluster_direction == ClusterDirection::Tie {
         mult_total *= st.cluster_tie_min_edge_multiplier;
     }
     let mut edge_min_for_trade =
@@ -159,7 +160,7 @@ fn log_shadow_counterfactual(
     record.rsi = Some(signal.rsi);
     record.macd_histogram = Some(signal.macd_histogram);
     record.volume_ratio = Some(signal.volume_ratio);
-    record.cluster_direction = Some(signal.cluster_direction.clone());
+    record.cluster_direction = Some(signal.cluster_direction);
     record.market_yes_price = Some(market.yes_price.to_string());
     record.liquidity = Some(market.liquidity.to_string());
     record.secs_to_close = Some(market.secs_to_close());
@@ -322,6 +323,7 @@ pub async fn run_cycle(
         let cal_version = if let Some(cal) = shadow_calibrator {
             if let Some(ov) = cal.get_overrides(&market.asset) {
                 crate::shadow_calibrator::apply_overrides(&mut st, ov);
+                crate::shadow_calibrator::sanitize_strategy_after_overrides(&mut st);
                 cal.current_version_for_asset(&market.asset)
             } else {
                 None
@@ -460,28 +462,6 @@ pub async fn run_cycle(
         signal =
             apply_market_timing_to_signal(signal, &market, window_secs, st.expiry_dampen_last_secs);
 
-        let mut multi_tf_agreement: Option<bool> = None;
-        let mut multi_tf_conf_adj: Option<f64> = None;
-        if st.multi_tf_enabled {
-            if let Some(Ok(mtf_candles)) = mtf_res_opt {
-                if mtf_candles.len() >= MIN_CANDLES_FOR_SIGNAL {
-                    if let Ok(mtf_signal_arc) = indicator_cache.get_or_compute(
-                        &market.asset, &st.multi_tf_interval, &mtf_candles, &signal_config,
-                    ) {
-                        let mtf_sig = &*mtf_signal_arc;
-                        let primary_up = signal.macd_histogram > 0.0 && signal.momentum_5m > 0.0;
-                        let mtf_up = mtf_sig.macd_histogram > 0.0 && mtf_sig.momentum_5m > 0.0;
-                        let agrees = primary_up == mtf_up;
-                        multi_tf_agreement = Some(agrees);
-                        let adj = if agrees { 0.03 } else { -0.03 };
-                        multi_tf_conf_adj = Some(adj);
-                        let adj_dec = Decimal::from_f64(adj).unwrap_or(Decimal::ZERO);
-                        signal.confidence = signal.confidence + adj_dec;
-                    }
-                }
-            }
-        }
-
         let effective_momentum_threshold = if st.dynamic_momentum_threshold && st.min_momentum_5m_abs > 0.0 {
             let vol_std = compute_return_std_pct(&candles, st.volatility_filter.sample_bars)
                 .and_then(|d| d.to_f64())
@@ -597,6 +577,29 @@ pub async fn run_cycle(
             continue;
         }
 
+        // Multi-TF after cheaper gates so we skip `get_or_compute` when momentum/MACD/vol fail first.
+        let mut multi_tf_agreement: Option<bool> = None;
+        let mut multi_tf_conf_adj: Option<f64> = None;
+        if st.multi_tf_enabled {
+            if let Some(Ok(mtf_candles)) = mtf_res_opt {
+                if mtf_candles.len() >= MIN_CANDLES_FOR_SIGNAL {
+                    if let Ok(mtf_signal_arc) = indicator_cache.get_or_compute(
+                        &market.asset, &st.multi_tf_interval, &mtf_candles, &signal_config,
+                    ) {
+                        let mtf_sig = &*mtf_signal_arc;
+                        let primary_up = signal.macd_histogram > 0.0 && signal.momentum_5m > 0.0;
+                        let mtf_up = mtf_sig.macd_histogram > 0.0 && mtf_sig.momentum_5m > 0.0;
+                        let agrees = primary_up == mtf_up;
+                        multi_tf_agreement = Some(agrees);
+                        let adj = if agrees { 0.03 } else { -0.03 };
+                        multi_tf_conf_adj = Some(adj);
+                        let adj_dec = Decimal::from_f64(adj).unwrap_or(Decimal::ZERO);
+                        signal.confidence = signal.confidence + adj_dec;
+                    }
+                }
+            }
+        }
+
         let volatility_std_pct = compute_return_std_pct(&candles, st.volatility_filter.sample_bars);
 
         if st.htf_enabled {
@@ -655,7 +658,7 @@ pub async fn run_cycle(
             st.adaptive_trade_window,
             st.adaptive_thresholds,
         );
-        if signal.cluster_direction == "DOWN" && st.cluster_down_confidence_add > 0.0 {
+        if signal.cluster_direction == ClusterDirection::Down && st.cluster_down_confidence_add > 0.0 {
             let add = Decimal::from_f64(st.cluster_down_confidence_add).unwrap_or(Decimal::ZERO);
             eff_min_confidence = (eff_min_confidence + add).min(dec!(0.99));
         }
@@ -711,10 +714,8 @@ pub async fn run_cycle(
             Direction::No => st.no_confidence_penalty,
         };
         let (dir_penalty, adaptive_dir_wr) = if st.adaptive_direction_penalty {
-            let dir_str = match direction { Direction::Yes => "YES", Direction::No => "NO" };
-            let trades_path = format!("{}/trades.jsonl", cfg.data_dir);
             adaptive::adaptive_direction_penalty(
-                &trades_path, &market.asset, dir_str,
+                &trades_path, &market.asset, direction,
                 base_dir_penalty, st.adaptive_penalty_window, true,
             )
         } else {
@@ -908,7 +909,7 @@ pub async fn run_cycle(
                     edge_min_for_trade,
                     st.min_edge,
                     st.adaptive_thresholds,
-                    signal.cluster_direction == "TIE",
+                    signal.cluster_direction == ClusterDirection::Tie,
                 )),
             );
             let mut hyp = edge::calculate_unchecked(signal.probability, market.yes_price, st.slippage_bps);
@@ -1212,7 +1213,7 @@ pub async fn run_cycle(
                     rsi: Some(signal.rsi),
                     macd_histogram: Some(signal.macd_histogram),
                     volume_ratio: Some(signal.volume_ratio),
-                    cluster_direction: Some(signal.cluster_direction.clone()),
+                    cluster_direction: Some(signal.cluster_direction),
                     market_yes_price: Some(market.yes_price.to_string()),
                     liquidity: Some(market.liquidity.to_string()),
                     secs_to_close: Some(market.secs_to_close()),
@@ -1234,6 +1235,16 @@ pub async fn run_cycle(
                     question: Some(market.question.clone()),
                     slippage_bps: Some(st.slippage_bps.to_string()),
                     effective_min_edge: Some(edge_min_for_trade.to_string()),
+                    multi_tf_direction_agreement: multi_tf_agreement,
+                    multi_tf_confidence_adj: multi_tf_conf_adj.map(|a| format!("{:.4}", a)),
+                    calibration_version: cal_version,
+                    adaptive_penalty_applied: st
+                        .adaptive_direction_penalty
+                        .then(|| format!("{:.4}", dir_penalty)),
+                    direction_wr_at_trade: st
+                        .adaptive_direction_penalty
+                        .then(|| adaptive_dir_wr.map(|w| format!("{:.4}", w)))
+                        .flatten(),
                 };
 
                 let immediate_fill =
@@ -1257,7 +1268,7 @@ pub async fn run_cycle(
                     record.rsi = Some(signal.rsi);
                     record.macd_histogram = Some(signal.macd_histogram);
                     record.volume_ratio = Some(signal.volume_ratio);
-                    record.cluster_direction = Some(signal.cluster_direction.clone());
+                    record.cluster_direction = Some(signal.cluster_direction);
                     record.market_yes_price = Some(market.yes_price.to_string());
                     record.liquidity = Some(market.liquidity.to_string());
                     record.secs_to_close = Some(market.secs_to_close());
@@ -1290,7 +1301,7 @@ pub async fn run_cycle(
                     }
                     record.multi_tf_direction_agreement = multi_tf_agreement;
                     record.multi_tf_confidence_adj = multi_tf_conf_adj.map(|a| format!("{:.4}", a));
-                    record.fill_status = Some("filled".to_string());
+                    record.fill_status = Some(FillStatus::Filled);
                     record.calibration_version = cal_version;
                     let _ = logger.log_trade(&record);
 

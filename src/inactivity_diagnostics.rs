@@ -2,7 +2,7 @@
 //!
 //! Reads all data files (`trades.jsonl`, `shadow_trades.jsonl`, `skip_reasons.jsonl`,
 //! `calibration_state.json`, `balance_state.json`) to produce a comprehensive
-//! JSON report under `data/inactivity_report_<ts>.json`.
+//! JSON report written to `data/inactivity_report.json` (overwritten on each run).
 //! The report is purely informational — no parameters are changed.
 
 use std::collections::HashMap;
@@ -11,11 +11,14 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Duration, Utc};
 use rust_decimal::Decimal;
 use serde::Serialize;
-use tracing::{info, warn};
+use std::path::Path;
+use tracing::info;
 
 use crate::config::AssetStrategy;
+use crate::fs_atomic;
 use crate::metrics::{read_trades_from_path, SkipRecord, TradeRecord};
 use crate::shadow_calibrator::CalibrationStateFile;
+use crate::types::Direction;
 
 // ---------------------------------------------------------------------------
 // Report structures
@@ -135,6 +138,9 @@ pub struct HourlySkipBucket {
 pub struct CalibrationSummary {
     pub loaded: bool,
     pub global_version: u64,
+    /// Config `strategy_version` from `calibration_state.json` when present.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub strategy_version: Option<String>,
     pub per_asset: Vec<CalibrationAssetSummary>,
 }
 
@@ -175,7 +181,7 @@ pub struct Recommendation {
 }
 
 /// One-line summary of recommendation rows for operator logs (paired with [`generate_report`]).
-pub fn format_recommendations_log_summary(recs: &[Recommendation]) -> String {
+fn format_recommendations_log_summary(recs: &[Recommendation]) -> String {
     use std::collections::HashMap;
 
     if recs.is_empty() {
@@ -215,7 +221,7 @@ pub fn format_recommendations_log_summary(recs: &[Recommendation]) -> String {
 
 const LOOKBACK_HOURS: u64 = 4;
 const TRADE_LOOKBACK_HOURS: u64 = 24;
-const MAX_REPORTS: usize = 50;
+const INACTIVITY_REPORT_FILE: &str = "inactivity_report.json";
 
 /// Minimum resolved trades per asset to warn about weak recent performance.
 const ASSET_PERF_MIN_TRADES: usize = 3;
@@ -272,16 +278,11 @@ pub fn generate_report(
     let json = serde_json::to_string_pretty(&report)
         .context("failed to serialize inactivity report")?;
 
-    let filename = format!(
-        "inactivity_report_{}.json",
-        Utc::now().format("%Y%m%d_%H%M%S")
-    );
+    let filename = INACTIVITY_REPORT_FILE;
     let path = format!("{}/{}", data_dir, filename);
 
-    std::fs::write(&path, &json)
+    fs_atomic::write_path_atomic(Path::new(&path), json.as_bytes())
         .with_context(|| format!("failed to write report: {}", path))?;
-
-    cleanup_old_reports(data_dir);
 
     info!(path = %path, "inactivity diagnostic report generated");
 
@@ -444,7 +445,10 @@ fn analyze_shadows(data_dir: &str, cutoff: DateTime<Utc>) -> Result<ShadowAnalys
 
 fn shadow_won(t: &TradeRecord) -> bool {
     let Some(outcome) = t.outcome else { return false };
-    matches!((t.direction.as_str(), outcome), ("YES", true) | ("NO", false))
+    matches!(
+        (t.direction, outcome),
+        (Direction::Yes, true) | (Direction::No, false)
+    )
 }
 
 fn trade_won(t: &TradeRecord) -> bool {
@@ -501,22 +505,21 @@ fn analyze_real_trades(data_dir: &str, cutoff: DateTime<Utc>) -> Result<RealTrad
     let mut yes_stats: HashMap<String, (usize, usize)> = HashMap::new();
     let mut no_stats: HashMap<String, (usize, usize)> = HashMap::new();
     for t in &resolved {
-        match t.direction.as_str() {
-            "YES" => {
+        match t.direction {
+            Direction::Yes => {
                 let e = yes_stats.entry(t.asset.clone()).or_insert((0, 0));
                 e.0 += 1;
                 if trade_won(t) {
                     e.1 += 1;
                 }
             }
-            "NO" => {
+            Direction::No => {
                 let e = no_stats.entry(t.asset.clone()).or_insert((0, 0));
                 e.0 += 1;
                 if trade_won(t) {
                     e.1 += 1;
                 }
             }
-            _ => {}
         }
     }
     let mut asset_keys: Vec<String> = yes_stats.keys().cloned().collect();
@@ -606,6 +609,7 @@ fn analyze_calibration(data_dir: &str) -> CalibrationSummary {
             return CalibrationSummary {
                 loaded: false,
                 global_version: 0,
+                strategy_version: None,
                 per_asset: vec![],
             };
         }
@@ -617,6 +621,7 @@ fn analyze_calibration(data_dir: &str) -> CalibrationSummary {
             return CalibrationSummary {
                 loaded: false,
                 global_version: 0,
+                strategy_version: None,
                 per_asset: vec![],
             };
         }
@@ -667,6 +672,7 @@ fn analyze_calibration(data_dir: &str) -> CalibrationSummary {
     CalibrationSummary {
         loaded: true,
         global_version: state.global_version,
+        strategy_version: state.strategy_version.clone(),
         per_asset,
     }
 }
@@ -1000,40 +1006,6 @@ fn build_recommendations(
     recs
 }
 
-// ---------------------------------------------------------------------------
-// Housekeeping: keep at most MAX_REPORTS report files
-// ---------------------------------------------------------------------------
-
-fn cleanup_old_reports(data_dir: &str) {
-    let dir = match std::fs::read_dir(data_dir) {
-        Ok(d) => d,
-        Err(_) => return,
-    };
-
-    let mut reports: Vec<std::path::PathBuf> = dir
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .filter(|p| {
-            p.file_name()
-                .and_then(|n| n.to_str())
-                .map(|n| n.starts_with("inactivity_report_") && n.ends_with(".json"))
-                .unwrap_or(false)
-        })
-        .collect();
-
-    if reports.len() <= MAX_REPORTS {
-        return;
-    }
-
-    reports.sort();
-    let to_remove = reports.len() - MAX_REPORTS;
-    for path in &reports[..to_remove] {
-        if let Err(e) = std::fs::remove_file(path) {
-            warn!(path = %path.display(), error = %e, "failed to clean up old inactivity report");
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1066,6 +1038,7 @@ mod tests {
         CalibrationSummary {
             loaded: false,
             global_version: 0,
+            strategy_version: None,
             per_asset: vec![],
         }
     }
@@ -1360,6 +1333,7 @@ mod tests {
         let cal = CalibrationSummary {
             loaded: true,
             global_version: 1,
+            strategy_version: Some("test".to_string()),
             per_asset: vec![CalibrationAssetSummary {
                 asset: "xrp".to_string(),
                 calibration_version: 2,

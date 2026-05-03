@@ -8,6 +8,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
+use crate::types::Direction;
 /// Root table for `config.toml`.
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(default)]
@@ -37,8 +38,10 @@ pub struct StrategySection {
     pub min_order_usdc_floor: Option<String>,
     /// Fraction added to token price for slippage (e.g. `0.002` = 20 bps). Mirrors env `SLIPPAGE_BPS`.
     pub slippage_bps: Option<String>,
+    /// Logical strategy / config release label (propagated to trade logs and state files).
+    pub strategy_version: Option<String>,
     /// Default block for all assets unless overridden per `[asset.*]` (`YES` or `NO`).
-    pub blocked_direction: Option<String>,
+    pub blocked_direction: Option<Direction>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -226,7 +229,7 @@ pub struct AssetOverride {
     pub cluster_tie_min_edge_multiplier: Option<f64>,
     pub slippage_bps: Option<String>,
     /// Block this Polymarket side for the asset (`YES` or `NO`).
-    pub blocked_direction: Option<String>,
+    pub blocked_direction: Option<Direction>,
     pub min_momentum_5m_abs: Option<f64>,
     pub neutral_taker_edge_multiplier: Option<f64>,
     pub rsi_yes_max: Option<f64>,
@@ -317,15 +320,15 @@ blocked_direction = "YES"
             Some("0.002")
         );
         assert_eq!(
-            r.strategy.as_ref().unwrap().blocked_direction.as_deref(),
-            Some("NO")
+            r.strategy.as_ref().unwrap().blocked_direction,
+            Some(crate::types::Direction::No)
         );
         let c = r.cluster.as_ref().unwrap();
         assert_eq!(c.cluster_tie_min_edge_multiplier, Some(1.3));
         assert_eq!(c.max_secs_to_close, Some(700));
         let btc = r.asset.as_ref().unwrap().get("btc").expect("btc");
         assert_eq!(btc.max_secs_to_close, Some(600));
-        assert_eq!(btc.blocked_direction.as_deref(), Some("YES"));
+        assert_eq!(btc.blocked_direction, Some(crate::types::Direction::Yes));
     }
 
     #[test]

@@ -187,24 +187,6 @@ pub fn load_resolved_trade_rows(path: &str) -> Result<Vec<ResolvedTradeRow>> {
     Ok(out)
 }
 
-/// Load resolved PnL values (USDC) from a JSONL file.
-pub fn load_resolved_pnls(path: &str) -> Result<Vec<f64>> {
-    Ok(load_resolved_trade_rows(path)?
-        .into_iter()
-        .filter_map(|r| row_pnl_f64(&r))
-        .collect())
-}
-
-/// Apply [`TradeFilter`] and return PnL samples for Monte Carlo.
-pub fn load_filtered_pnls(path: &str, filter: &TradeFilter) -> Result<Vec<f64>> {
-    let rows = load_resolved_trade_rows(path)?;
-    Ok(rows
-        .iter()
-        .filter(|r| filter.matches(r))
-        .filter_map(|r| row_pnl_f64(r))
-        .collect())
-}
-
 /// **Monte Carlo:** bootstrap resample trades with replacement `iterations` times; each iteration sums `n` trades.
 pub fn monte_carlo_total_pnl(trades: &[f64], iterations: usize, seed: u64) -> Vec<f64> {
     if trades.is_empty() || iterations == 0 {

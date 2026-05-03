@@ -144,12 +144,4 @@ impl InactivityWatchdog {
             }
         }
     }
-
-    /// Reset the consecutive size-skip counter (e.g. when a non-size skip occurs).
-    pub fn reset_size_skips(&mut self) {
-        if self.consecutive_size_skips > 0 {
-            self.consecutive_size_skips = 0;
-            self.size_skip_warned = false;
-        }
-    }
 }

@@ -8,3 +8,5 @@ __pycache__/
 
 # IDE (isteğe bağlı — paylaşmak istersen bu satırı sil)
 .idea/
+.venv/
+.cursor/

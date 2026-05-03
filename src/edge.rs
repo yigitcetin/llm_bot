@@ -16,7 +16,7 @@ fn ceil_to_cent_tick(price: Decimal) -> Decimal {
 /// Worst-case outcome token price (slippage applied, capped at 0.99) for buying `direction`.
 /// Matches the pricing leg of [`calculate`]; used when [`crate::market_matcher`] overrides direction
 /// so `token_price` stays aligned with YES vs NO token.
-pub fn token_price_for_direction(
+pub(crate) fn token_price_for_direction(
     market_yes_price: Decimal,
     direction: Direction,
     slippage_bps: Decimal,

@@ -8,7 +8,7 @@ Polymarket tahmin piyasalarında (ör. BTC/ETH/SOL, 5m/15m) **teknik analiz** ta
 
 **Dinamik emir tabanı:** Kelly öncesi efektif minimum USDC, `min_order_usdc_floor` ile sabit tabanın üzerinde `balance × max_position_pct × 0.8` ile ölçeklenir; üst sınır `min_order_usdc` (`config.toml`: `min_order_usdc`, `min_order_usdc_floor`).
 
-**İnaktivite tanılama:** Uzun süre trade yoksa veya çok sayıda `order_size_below_minimum` atlama tetiklenince WARN ve isteğe bağlı **`data/inactivity_report_<timestamp>.json`** raporu (skip/shadow/gerçek trade/kalibrasyon özeti; parametre değiştirmez).
+**İnaktivite tanılama:** Uzun süre trade yoksa veya çok sayıda `order_size_below_minimum` atlama tetiklenince WARN ve isteğe bağlı **`data/inactivity_report.json`** raporu (skip/shadow/gerçek trade/kalibrasyon özeti; parametre değiştirmez; her tetikte üzerine yazılır).
 
 ## Dizin yapısı (özet)
 
@@ -25,7 +25,7 @@ llm_bot/
 │   ├── balance_state.json   # RiskManager bakiyesi (otomatik yazılır)
 │   ├── skip_reasons.jsonl     # Atlama telemetrisi (log_skip_decision)
 │   ├── order_failures.jsonl   # Emir yerleştirme hataları (oluşunca)
-│   └── inactivity_report_*.json  # Watchdog tetiklenince tanılama raporu (en fazla 50 dosya tutulur)
+│   └── inactivity_report.json  # Watchdog tetiklenince tanılama raporu (üzerine yazılır)
 ├── scripts/analysis/        # Python analiz yardımcıları (shadow/trades üzerinde)
 └── src/
     ├── main.rs              # Binary: döngü, çözüm, shadow kalibrasyon, inaktivite watchdog
@@ -89,7 +89,7 @@ flowchart LR
   Data --> Inact
 ```
 
-Canlı döngü (`trading_loop`) her pazar için: ön filtreler (likidite, fiyat bandı, süre, açık pozisyon) → yeterli mum → önbelleklenmiş teknik sinyal → momentum / MACD / volatilite → HTF → adaptif eşikler ve yön cezası → taker hizası → yön eşleme ve edge → RSI / boyut / risk → dry-run veya gerçek emir. Döngü sonunda `CycleStats` (yerleştirilen trade sayısı, `order_size_below_minimum` atlama sayısı) ana döngüye döner. Her döngü sonunda: açık pozisyon çözümü, ardından dosyadan `trades.jsonl` ve `shadow_trades.jsonl` geriye çözüm; `[shadow_calibration] enabled` ise `maybe_recalibrate` çalışır (shadow önerileri, son gerçek işlemlere göre **live veto** ile gevşetme tarafı filtrelenebilir). **İnaktivite watchdog:** uzun süre trade yoksa veya çok sayıda boyut tabanı atlama tetiklenince WARN ve bir kez **`inactivity_report_*.json`** tanılama raporu üretilir (`skip_reasons`, shadow, gerçek trade, kalibrasyon özeti; yapılandırma değiştirmez).
+Canlı döngü (`trading_loop`) her pazar için: ön filtreler (likidite, fiyat bandı, süre, açık pozisyon) → yeterli mum → önbelleklenmiş teknik sinyal → momentum / MACD / volatilite → HTF → adaptif eşikler ve yön cezası → taker hizası → yön eşleme ve edge → RSI / boyut / risk → dry-run veya gerçek emir. Döngü sonunda `CycleStats` (yerleştirilen trade sayısı, `order_size_below_minimum` atlama sayısı) ana döngüye döner. Her döngü sonunda: açık pozisyon çözümü, ardından dosyadan `trades.jsonl` ve `shadow_trades.jsonl` geriye çözüm; `[shadow_calibration] enabled` ise `maybe_recalibrate` çalışır (shadow önerileri, son gerçek işlemlere göre **live veto** ile gevşetme tarafı filtrelenebilir). **İnaktivite watchdog:** uzun süre trade yoksa veya çok sayıda boyut tabanı atlama tetiklenince WARN ve bir kez **`data/inactivity_report.json`** tanılama raporu üretilir (`skip_reasons`, shadow, gerçek trade, kalibrasyon özeti; yapılandırma değiştirmez).
 
 ## Modül ve paket tablosu
 
@@ -109,7 +109,7 @@ Canlı döngü (`trading_loop`) her pazar için: ön filtreler (likidite, fiyat 
 | **`adaptive`** | Son çözümlenmiş **gerçek** işlemlerden `min_edge` / `min_confidence` ve isteğe bağlı yön cezası (`trades.jsonl`) |
 | **`shadow_calibrator`** | Çözümlenmiş **shadow** işlemlerden asset bazlı override önerisi; `calibration_state.json`; rollback (kötü canlı WR) |
 | **`inactivity_watchdog`** | Uzun süre trade yok (~4 saat) veya çok sayıda ardışık `order_size_below_minimum` → WARN |
-| **`inactivity_diagnostics`** | Watchdog tetiklenince `data/inactivity_report_<timestamp>.json`: skip/shadow/gerçek trade özeti, saatlik skip, kalibrasyon snapshot, bakiye trendi; **yalnızca bilgi** |
+| **`inactivity_diagnostics`** | Watchdog tetiklenince `data/inactivity_report.json`: skip/shadow/gerçek trade özeti, saatlik skip, kalibrasyon snapshot, bakiye trendi; **yalnızca bilgi** |
 | **`metrics`** | JSONL: işlemler, shadow, atlama nedenleri, emir hataları; `TradeRecord` şeması |
 | **`resolution_checker`** | CLOB ile market çözümü; `trades.jsonl` / `shadow_trades.jsonl` satır güncelleme |
 | **`gamma` / `spot_price`** | Gamma etkin pazarlar; Binance (vb.) mumlar |
@@ -123,13 +123,13 @@ Canlı döngü (`trading_loop`) her pazar için: ön filtreler (likidite, fiyat 
 
 | Dosya | İçerik |
 |--------|--------|
-| **`trades.jsonl`** | Yerleştirilen işlemler; çözümde `outcome`, `pnl`, `resolved_at`; telemetri alanları; isteğe bağlı `calibration_version` (shadow kalibrasyon sürümü) |
+| **`trades.jsonl`** | Yerleştirilen işlemler; çözümde `outcome`, `pnl`, `resolved_at`; telemetri alanları; isteğe bağlı `calibration_version` (shadow kalibrasyon sürümü); `strategy_version` (`[strategy]` / `STRATEGY_VERSION`) |
 | **`shadow_trades.jsonl`** | Sinyal üretildikten sonra filtre yüzünden atlanan **hayali** işlemler (sabit notional, `skip_reason`); çözüm ile PnL |
-| **`calibration_state.json`** | Shadow kalibrasyon açıksa: asset başına son kalibrasyon, uygulanan override snapshot, rollback bayrağı |
+| **`calibration_state.json`** | Shadow kalibrasyon açıksa: asset başına son kalibrasyon, uygulanan override snapshot, rollback bayrağı; dosya düzeyinde `strategy_version` |
 | **`skip_reasons.jsonl`** | Atlama telemetrisi (`log_skip_decision`): likidite, edge, RSI, boyut tabanı vb. |
 | **`order_failures.jsonl`** | `place_order` hataları |
-| **`balance_state.json`** | Son bilinen bakiye ve zaman damgası; her başlangıçta güncel değerle yazılır; CLOB’tan okuma yoksa veya dry-run’da önceki dosya / `INITIAL_BALANCE` kullanılır |
-| **`inactivity_report_*.json`** | İnaktivite uyarısı sonrası tanılama özeti (eski raporlar otomatik budanır, en fazla ~50 dosya) |
+| **`balance_state.json`** | Son bilinen bakiye, zaman damgası ve `strategy_version`; her başlangıçta güncel değerle yazılır; CLOB’tan okuma yoksa veya dry-run’da önceki dosya / `INITIAL_BALANCE` kullanılır |
+| **`inactivity_report.json`** | İnaktivite uyarısı sonrası tanılama özeti (her tetikte üzerine yazılır) |
 
 **Not:** Yerel sıfırlama için `data/` içindeki JSONL ve kalıcı JSON dosyalarını silebilirsiniz; dizin boş kalabilir veya `data/.gitkeep` ile yer tutulur; bot ilk yazımında dosyaları yeniden oluşturur.
 
@@ -195,7 +195,7 @@ Kök `data/shadow_trades.jsonl` ve `trades.jsonl` üzerinde çalışan Python ya
 - **OTLP:** `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME` (ör. Jaeger / collector gRPC 4317)
 - **JSON log:** `LOG_JSON=true`
 - **Prometheus:** `METRICS_ENABLED=true`, `METRICS_BIND=127.0.0.1:9090` — `curl` ile `/metrics`
-- **İnaktivite:** `WARN` seviyesinde watchdog mesajları; tetiklenince `data/inactivity_report_*.json` üretimi için `INFO`/`ERROR` logları
+- **İnaktivite:** `WARN` seviyesinde watchdog mesajları; tetiklenince `data/inactivity_report.json` üretimi için `INFO`/`ERROR` logları
 
 ## CLOB ve SDK
 

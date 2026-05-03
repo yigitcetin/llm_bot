@@ -17,7 +17,10 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
 use crate::config::AssetStrategy;
+use crate::fs_atomic;
 use crate::metrics::{read_trades_from_path, TradeRecord};
+use crate::record_enums::ClusterDirection;
+use crate::types::Direction;
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -268,6 +271,28 @@ pub fn apply_overrides(base: &mut AssetStrategy, ov: &CalibratedOverrides) {
     }
 }
 
+/// Restore cross-field invariants after applying calibrator overrides (swap/clamp; never reject).
+pub(crate) fn sanitize_strategy_after_overrides(st: &mut AssetStrategy) {
+    if st.cluster_rsi_oversold >= st.cluster_rsi_overbought {
+        std::mem::swap(&mut st.cluster_rsi_oversold, &mut st.cluster_rsi_overbought);
+    }
+    if st.cluster_rsi_oversold >= st.cluster_rsi_overbought {
+        // Still equal or inverted: nudge so oversold is strictly below overbought (RSI band semantics).
+        st.cluster_rsi_overbought = st.cluster_rsi_oversold + 1.0;
+    }
+    if st.taker_yes_min_ratio > st.taker_no_max_ratio {
+        let mid = (st.taker_yes_min_ratio + st.taker_no_max_ratio) / 2.0;
+        st.taker_yes_min_ratio = mid;
+        st.taker_no_max_ratio = mid;
+    }
+    if let (Some(min_s), Some(max_s)) = (st.min_secs_to_close, st.max_secs_to_close) {
+        if min_s > max_s {
+            st.min_secs_to_close = Some(max_s);
+            st.max_secs_to_close = Some(min_s);
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Calibration state (persisted to calibration_state.json)
 // ---------------------------------------------------------------------------
@@ -279,6 +304,9 @@ pub struct AssetCalibrationState {
     pub shadow_pnl: f64,
     pub shadow_trade_count: usize,
     pub calibration_version: u64,
+    /// `AppConfig.strategy_version` when this calibration row was written.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strategy_version: Option<String>,
     pub applied_overrides: CalibratedOverrides,
     pub base_snapshot: BaseSnapshot,
     pub trade_count_since_calibration: usize,
@@ -354,6 +382,9 @@ impl BaseSnapshot {
 pub struct CalibrationStateFile {
     pub assets: HashMap<String, AssetCalibrationState>,
     pub global_version: u64,
+    /// Latest `AppConfig.strategy_version` reflected in this file (set on save).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strategy_version: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -387,10 +418,10 @@ fn trade_won(t: &TradeRecord) -> bool {
     let Some(outcome) = t.outcome else {
         return false;
     };
-    match (t.direction.as_str(), outcome) {
-        ("YES", true) | ("NO", false) => true,
-        _ => false,
-    }
+    matches!(
+        (t.direction, outcome),
+        (Direction::Yes, true) | (Direction::No, false)
+    )
 }
 
 fn resolved_time(t: &TradeRecord) -> DateTime<Utc> {
@@ -415,7 +446,7 @@ pub struct LiveDirectionStats {
 }
 
 /// Win rate and sum PnL for the last `window` resolved live trades on `asset`.
-pub fn compute_live_asset_stats(trades_path: &str, asset: &str, window: usize) -> Option<LiveAssetGate> {
+pub(crate) fn compute_live_asset_stats(trades_path: &str, asset: &str, window: usize) -> Option<LiveAssetGate> {
     let trades = read_trades_from_path(trades_path).ok()?;
     let mut resolved: Vec<&TradeRecord> = trades
         .iter()
@@ -445,7 +476,7 @@ pub fn compute_live_asset_stats(trades_path: &str, asset: &str, window: usize) -
 }
 
 /// YES vs NO live win rates for the last `window` resolved trades on `asset`.
-pub fn compute_live_direction_stats(trades_path: &str, asset: &str, window: usize) -> Option<LiveDirectionStats> {
+pub(crate) fn compute_live_direction_stats(trades_path: &str, asset: &str, window: usize) -> Option<LiveDirectionStats> {
     let trades = read_trades_from_path(trades_path).ok()?;
     let mut resolved: Vec<&TradeRecord> = trades
         .iter()
@@ -462,8 +493,8 @@ pub fn compute_live_direction_stats(trades_path: &str, asset: &str, window: usiz
     resolved.sort_by(|a, b| resolved_time(a).cmp(&resolved_time(b)));
     let take = window.min(resolved.len());
     let slice = &resolved[resolved.len() - take..];
-    let yes: Vec<_> = slice.iter().filter(|t| t.direction == "YES").copied().collect();
-    let no: Vec<_> = slice.iter().filter(|t| t.direction == "NO").copied().collect();
+    let yes: Vec<_> = slice.iter().filter(|t| t.direction == Direction::Yes).copied().collect();
+    let no: Vec<_> = slice.iter().filter(|t| t.direction == Direction::No).copied().collect();
     let yes_wins = yes.iter().filter(|t| trade_won(t)).count();
     let no_wins = no.iter().filter(|t| trade_won(t)).count();
     let yes_wr = if yes.is_empty() {
@@ -837,7 +868,7 @@ fn compute_percentiles(values: &mut Vec<f64>) -> Option<PercentileSet> {
     })
 }
 
-pub fn compute_shadow_stats(trades: &[TradeRecord], asset: &str) -> ShadowAssetStats {
+pub(crate) fn compute_shadow_stats(trades: &[TradeRecord], asset: &str) -> ShadowAssetStats {
     let resolved: Vec<&TradeRecord> = trades
         .iter()
         .filter(|t| t.asset == asset && t.outcome.is_some())
@@ -851,8 +882,8 @@ pub fn compute_shadow_stats(trades: &[TradeRecord], asset: &str) -> ShadowAssetS
     let wins = resolved.iter().filter(|t| trade_won(t)).count();
     let wr = wins as f64 / n as f64;
 
-    let yes_trades: Vec<&&TradeRecord> = resolved.iter().filter(|t| t.direction == "YES").collect();
-    let no_trades: Vec<&&TradeRecord> = resolved.iter().filter(|t| t.direction == "NO").collect();
+    let yes_trades: Vec<&&TradeRecord> = resolved.iter().filter(|t| t.direction == Direction::Yes).collect();
+    let no_trades: Vec<&&TradeRecord> = resolved.iter().filter(|t| t.direction == Direction::No).collect();
     let yes_wins = yes_trades.iter().filter(|t| trade_won(t)).count();
     let no_wins = no_trades.iter().filter(|t| trade_won(t)).count();
     let wr_yes = if yes_trades.is_empty() { 0.0 } else { yes_wins as f64 / yes_trades.len() as f64 };
@@ -875,7 +906,7 @@ pub fn compute_shadow_stats(trades: &[TradeRecord], asset: &str) -> ShadowAssetS
     // YES winners RSI (for rsi_yes_max)
     let mut yes_winner_rsi: Vec<f64> = winners
         .iter()
-        .filter(|t| t.direction == "YES")
+        .filter(|t| t.direction == Direction::Yes)
         .filter_map(|t| t.rsi)
         .collect();
     if let Some(p) = compute_percentiles(&mut yes_winner_rsi) {
@@ -884,7 +915,7 @@ pub fn compute_shadow_stats(trades: &[TradeRecord], asset: &str) -> ShadowAssetS
     // NO winners RSI (for rsi_no_min)
     let mut no_winner_rsi: Vec<f64> = winners
         .iter()
-        .filter(|t| t.direction == "NO")
+        .filter(|t| t.direction == Direction::No)
         .filter_map(|t| t.rsi)
         .collect();
     if let Some(p) = compute_percentiles(&mut no_winner_rsi) {
@@ -916,7 +947,7 @@ pub fn compute_shadow_stats(trades: &[TradeRecord], asset: &str) -> ShadowAssetS
     }
     let mut yes_winner_tbr: Vec<f64> = winners
         .iter()
-        .filter(|t| t.direction == "YES")
+        .filter(|t| t.direction == Direction::Yes)
         .filter_map(|t| t.taker_buy_ratio)
         .collect();
     if let Some(p) = compute_percentiles(&mut yes_winner_tbr) {
@@ -924,7 +955,7 @@ pub fn compute_shadow_stats(trades: &[TradeRecord], asset: &str) -> ShadowAssetS
     }
     let mut no_winner_tbr: Vec<f64> = winners
         .iter()
-        .filter(|t| t.direction == "NO")
+        .filter(|t| t.direction == Direction::No)
         .filter_map(|t| t.taker_buy_ratio)
         .collect();
     if let Some(p) = compute_percentiles(&mut no_winner_tbr) {
@@ -961,15 +992,20 @@ pub fn compute_shadow_stats(trades: &[TradeRecord], asset: &str) -> ShadowAssetS
     let mut segment_counts = HashMap::new();
 
     // Cluster direction segments
-    for segment in ["DOWN", "TIE"] {
+    for segment in [ClusterDirection::Down, ClusterDirection::Tie] {
         let seg_trades: Vec<&&TradeRecord> = resolved
             .iter()
-            .filter(|t| t.cluster_direction.as_deref() == Some(segment))
+            .filter(|t| t.cluster_direction == Some(segment))
             .collect();
         if seg_trades.len() >= 5 {
             let seg_wins = seg_trades.iter().filter(|t| trade_won(t)).count();
-            segment_wrs.insert(format!("cluster_{}", segment.to_lowercase()), seg_wins as f64 / seg_trades.len() as f64);
-            segment_counts.insert(format!("cluster_{}", segment.to_lowercase()), seg_trades.len());
+            let key = match segment {
+                ClusterDirection::Up => "cluster_up",
+                ClusterDirection::Down => "cluster_down",
+                ClusterDirection::Tie => "cluster_tie",
+            };
+            segment_wrs.insert(key.to_string(), seg_wins as f64 / seg_trades.len() as f64);
+            segment_counts.insert(key.to_string(), seg_trades.len());
         }
     }
 
@@ -1083,6 +1119,20 @@ pub fn compute_shadow_stats(trades: &[TradeRecord], asset: &str) -> ShadowAssetS
 // Proposal engine
 // ---------------------------------------------------------------------------
 
+/// Confidence above 1.0 is meaningless; clamp calibrator `min_confidence` proposals.
+const MAX_CALIBRATED_MIN_CONFIDENCE: f64 = 0.99;
+/// Lower bound aligned with [`crate::config::AssetStrategy::validate`] (`min_confidence` >= 0.5).
+const MIN_CALIBRATED_MIN_CONFIDENCE: f64 = 0.50;
+
+/// Keep WR-driven multiplier proposals within [`AssetStrategy::validate`] `[1.0, 5.0]`.
+fn clamp_calibrated_multiplier(v: f64) -> f64 {
+    v.max(1.0_f64).min(5.0_f64)
+}
+/// When base `min_macd_histogram_abs` is 0, `clamp_bounds` does not limit percentile-driven values — cap here.
+const ZERO_BASE_MIN_MACD_HIST_ABS_CAP: f64 = 1.0;
+/// When base `min_momentum_5m_abs` is 0, percentile-driven proposals are capped (same class of bug as MACD at base 0).
+const ZERO_BASE_MIN_MOMENTUM_5M_ABS_CAP: f64 = 0.01;
+
 fn clamp_step(current: f64, proposed: f64, max_step_pct: f64) -> f64 {
     if current == 0.0 {
         return proposed;
@@ -1153,7 +1203,7 @@ fn strip_penalty_loosening_for_live_direction(
     }
 }
 
-pub fn propose_overrides(
+pub(crate) fn propose_overrides(
     stats: &ShadowAssetStats,
     base: &BaseSnapshot,
     current: &CalibratedOverrides,
@@ -1172,6 +1222,11 @@ pub fn propose_overrides(
     }
     if !excluded("min_confidence") {
         ov.min_confidence = wr_driven_nudge(cur_min_conf, stats.wr, base.min_confidence, cfg);
+        if let Some(v) = ov.min_confidence {
+            ov.min_confidence = Some(
+                v.clamp(MIN_CALIBRATED_MIN_CONFIDENCE, MAX_CALIBRATED_MIN_CONFIDENCE),
+            );
+        }
     }
 
     if !excluded("yes_confidence_penalty") || !excluded("no_confidence_penalty") {
@@ -1209,19 +1264,37 @@ pub fn propose_overrides(
     if !excluded("cluster_tie_min_edge_multiplier") {
         if let Some(&seg_wr) = stats.segment_wrs.get("cluster_tie") {
             let cur = current.cluster_tie_min_edge_multiplier.unwrap_or(base.cluster_tie_min_edge_multiplier);
-            ov.cluster_tie_min_edge_multiplier = wr_driven_multiplier_nudge(cur, seg_wr, base.cluster_tie_min_edge_multiplier, cfg);
+            ov.cluster_tie_min_edge_multiplier = wr_driven_multiplier_nudge(
+                cur,
+                seg_wr,
+                base.cluster_tie_min_edge_multiplier,
+                cfg,
+            )
+            .map(clamp_calibrated_multiplier);
         }
     }
     if !excluded("neutral_taker_edge_multiplier") {
         if let Some(&seg_wr) = stats.segment_wrs.get("neutral_tbr") {
             let cur = current.neutral_taker_edge_multiplier.unwrap_or(base.neutral_taker_edge_multiplier);
-            ov.neutral_taker_edge_multiplier = wr_driven_multiplier_nudge(cur, seg_wr, base.neutral_taker_edge_multiplier, cfg);
+            ov.neutral_taker_edge_multiplier = wr_driven_multiplier_nudge(
+                cur,
+                seg_wr,
+                base.neutral_taker_edge_multiplier,
+                cfg,
+            )
+            .map(clamp_calibrated_multiplier);
         }
     }
     if !excluded("mid_price_band_min_edge_multiplier") {
         if let Some(&seg_wr) = stats.segment_wrs.get("mid_price_band") {
             let cur = current.mid_price_band_min_edge_multiplier.unwrap_or(base.mid_price_band_min_edge_multiplier);
-            ov.mid_price_band_min_edge_multiplier = wr_driven_multiplier_nudge(cur, seg_wr, base.mid_price_band_min_edge_multiplier, cfg);
+            ov.mid_price_band_min_edge_multiplier = wr_driven_multiplier_nudge(
+                cur,
+                seg_wr,
+                base.mid_price_band_min_edge_multiplier,
+                cfg,
+            )
+            .map(clamp_calibrated_multiplier);
         }
     }
 
@@ -1229,7 +1302,11 @@ pub fn propose_overrides(
     if !excluded("min_macd_histogram_abs") {
         if let Some(p) = stats.percentiles.get("macd_histogram_abs") {
             let cur = current.min_macd_histogram_abs.unwrap_or(base.min_macd_histogram_abs);
-            ov.min_macd_histogram_abs = Some(safe_propose(cur, p.p25, base.min_macd_histogram_abs, cfg));
+            let mut proposed = safe_propose(cur, p.p25, base.min_macd_histogram_abs, cfg);
+            if base.min_macd_histogram_abs.abs() < 1e-12 {
+                proposed = proposed.clamp(0.0, ZERO_BASE_MIN_MACD_HIST_ABS_CAP);
+            }
+            ov.min_macd_histogram_abs = Some(proposed);
         }
     }
     if !excluded("volume_min_ratio") {
@@ -1242,7 +1319,11 @@ pub fn propose_overrides(
     if !excluded("min_momentum_5m_abs") {
         if let Some(p) = stats.percentiles.get("momentum_5m_abs") {
             let cur = current.min_momentum_5m_abs.unwrap_or(base.min_momentum_5m_abs);
-            ov.min_momentum_5m_abs = Some(safe_propose(cur, p.p25, base.min_momentum_5m_abs, cfg));
+            let mut proposed = safe_propose(cur, p.p25, base.min_momentum_5m_abs, cfg);
+            if base.min_momentum_5m_abs.abs() < 1e-12 {
+                proposed = proposed.clamp(0.0, ZERO_BASE_MIN_MOMENTUM_5M_ABS_CAP);
+            }
+            ov.min_momentum_5m_abs = Some(proposed);
         }
     }
     if !excluded("momentum_vol_reference") {
@@ -1376,7 +1457,7 @@ pub fn propose_overrides(
 // Rollback monitor
 // ---------------------------------------------------------------------------
 
-pub fn should_rollback(
+pub(crate) fn should_rollback(
     trades_path: &str,
     asset: &str,
     calibration_version: u64,
@@ -1417,15 +1498,28 @@ pub struct ShadowCalibrator {
     state_path: String,
     shadow_trades_path: String,
     trades_path: String,
+    strategy_version: String,
 }
 
 impl ShadowCalibrator {
-    pub fn new(data_dir: &str, config: ShadowCalibrationConfig) -> Self {
+    pub fn new(data_dir: &str, config: ShadowCalibrationConfig, strategy_version: &str) -> Self {
         let state_path = format!("{}/calibration_state.json", data_dir);
         let shadow_trades_path = format!("{}/shadow_trades.jsonl", data_dir);
         let trades_path = format!("{}/trades.jsonl", data_dir);
 
-        let state = Self::load_state(&state_path).unwrap_or_default();
+        let mut state = Self::load_state(&state_path).unwrap_or_default();
+        let current_sv = strategy_version.trim();
+        if let Some(ref stored) = state.strategy_version {
+            let stored = stored.trim();
+            if !stored.is_empty() && stored != current_sv {
+                warn!(
+                    stored = %stored,
+                    current = %current_sv,
+                    "calibration_state.json strategy_version mismatch — resetting calibration state"
+                );
+                state = CalibrationStateFile::default();
+            }
+        }
 
         Self {
             config,
@@ -1433,6 +1527,7 @@ impl ShadowCalibrator {
             state_path,
             shadow_trades_path,
             trades_path,
+            strategy_version: strategy_version.trim().to_string(),
         }
     }
 
@@ -1446,11 +1541,12 @@ impl ShadowCalibrator {
             .with_context(|| format!("parse calibration state: {}", path))
     }
 
-    fn save_state(&self) -> Result<()> {
+    fn save_state(&mut self) -> Result<()> {
+        self.state.strategy_version = Some(self.strategy_version.clone());
         let json = serde_json::to_string_pretty(&self.state)
             .context("serialize calibration state")?;
-        std::fs::write(&self.state_path, json)
-            .with_context(|| format!("write calibration state: {}", self.state_path))
+        fs_atomic::write_path_atomic(Path::new(&self.state_path), json.as_bytes())
+            .with_context(|| format!("atomic write calibration state: {}", self.state_path))
     }
 
     pub fn current_version_for_asset(&self, asset: &str) -> Option<u64> {
@@ -1625,6 +1721,7 @@ impl ShadowCalibrator {
                     shadow_pnl: stats.pnl,
                     shadow_trade_count: stats.trade_count,
                     calibration_version: version,
+                    strategy_version: Some(self.strategy_version.clone()),
                     applied_overrides: merged_ov,
                     base_snapshot: base_snap,
                     trade_count_since_calibration: 0,

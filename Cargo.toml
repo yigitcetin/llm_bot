@@ -18,7 +18,17 @@ path = "src/bin/backtest.rs"
 
 [dependencies]
 # Async runtime
-tokio = { version = "1", features = ["full"] }
+# Narrow features vs `full` — add any missing feature if a dependency fails to compile.
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "macros",
+    "net",
+    "time",
+    "signal",
+    "sync",
+    "io-util",
+    "fs",
+] }
 futures = "0.3"
 
 # HTTP client
