@@ -22,8 +22,17 @@ pub struct TomlRoot {
     pub adaptive: Option<AdaptiveSection>,
     pub execution: Option<ExecutionSection>,
     pub shadow_calibration: Option<ShadowCalibrationSection>,
+    pub liquidity_adapt: Option<LiquidityAdaptSection>,
+    pub inactivity_watchdog: Option<InactivityWatchdogSection>,
     /// Per-asset overrides: `[asset.btc]`, `[asset.eth]`, …
     pub asset: Option<HashMap<String, AssetOverride>>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default)]
+pub struct InactivityWatchdogSection {
+    /// Seconds between forced `inactivity_report.json` writes while trading (`0` = off).
+    pub periodic_report_interval_secs: Option<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -184,6 +193,22 @@ pub struct ShadowCalibrationSection {
     pub live_direction_veto_wr: Option<f64>,
 }
 
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default)]
+pub struct LiquidityAdaptSection {
+    pub enabled: Option<bool>,
+    pub window_n: Option<usize>,
+    pub loosen_share_threshold: Option<f64>,
+    pub tighten_share_threshold: Option<f64>,
+    pub step_down_pct: Option<f64>,
+    pub step_up_pct: Option<f64>,
+    pub floor_usdc: Option<String>,
+    pub ceiling_multiplier: Option<f64>,
+    pub cooldown_cycles: Option<u64>,
+    pub min_skips_in_window: Option<usize>,
+    pub tail_read_bytes: Option<u64>,
+}
+
 /// Fields mirror per-asset env keys (`MIN_EDGE_BTC`, …) without the `_ASSET` suffix.
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(default)]
@@ -342,5 +367,16 @@ neutral_taker_edge_multiplier = 1.5
         let c = r.cluster.as_ref().unwrap();
         assert_eq!(c.min_momentum_5m_abs, Some(0.0008));
         assert_eq!(c.neutral_taker_edge_multiplier, Some(1.5));
+    }
+
+    #[test]
+    fn parses_inactivity_watchdog_section() {
+        let s = r#"
+[inactivity_watchdog]
+periodic_report_interval_secs = 7200
+"#;
+        let r: TomlRoot = toml::from_str(s).expect("toml");
+        let iw = r.inactivity_watchdog.as_ref().expect("section");
+        assert_eq!(iw.periodic_report_interval_secs, Some(7200));
     }
 }

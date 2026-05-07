@@ -23,10 +23,13 @@ pub struct InactivityWatchdog {
     total_cycles: u64,
     total_trades: u64,
     report_requested: bool,
+    periodic_report_interval: Duration,
+    last_periodic_report: Instant,
 }
 
 impl InactivityWatchdog {
-    pub fn new() -> Self {
+    /// `periodic_report_interval_secs`: if &gt; 0, schedule `inactivity_report.json` on this interval.
+    pub fn new(periodic_report_interval_secs: u64) -> Self {
         let now = Instant::now();
         Self {
             last_trade_at: now,
@@ -37,6 +40,8 @@ impl InactivityWatchdog {
             total_cycles: 0,
             total_trades: 0,
             report_requested: false,
+            periodic_report_interval: Duration::from_secs(periodic_report_interval_secs),
+            last_periodic_report: now,
         }
     }
 
@@ -55,6 +60,7 @@ impl InactivityWatchdog {
 
         self.check_inactivity(risk);
         self.maybe_log_balance(risk, data_dir);
+        self.maybe_schedule_periodic_report();
     }
 
     /// Call whenever an `order_size_below_minimum` skip occurs.
@@ -103,6 +109,21 @@ impl InactivityWatchdog {
                 "INACTIVITY: no trades placed for {hours}h {mins}m — generating diagnostic report"
             );
         }
+    }
+
+    fn maybe_schedule_periodic_report(&mut self) {
+        if self.periodic_report_interval.is_zero() {
+            return;
+        }
+        if self.last_periodic_report.elapsed() < self.periodic_report_interval {
+            return;
+        }
+        self.last_periodic_report = Instant::now();
+        self.report_requested = true;
+        tracing::info!(
+            interval_secs = self.periodic_report_interval.as_secs(),
+            "periodic diagnostic report scheduled"
+        );
     }
 
     /// Returns `true` once when a diagnostic report should be generated,

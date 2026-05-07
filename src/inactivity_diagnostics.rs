@@ -18,7 +18,15 @@ use crate::config::AssetStrategy;
 use crate::fs_atomic;
 use crate::metrics::{read_trades_from_path, SkipRecord, TradeRecord};
 use crate::shadow_calibrator::CalibrationStateFile;
+use crate::shadow_trade_optimization::{
+    build_opportunity_board, build_shadow_data_quality, canary_playbook, filter_param_mapping_matrix,
+    tuning_packages, CanaryPlaybook, FilterParamMapping, ShadowDataQuality, ShadowOpportunityBoard,
+    TuningPackagesReport,
+};
 use crate::types::Direction;
+
+/// Max `(skip_reason, asset)` cells per opportunity board (keeps JSON bounded).
+const SHADOW_OPPORTUNITY_BOARD_TOP: usize = 100;
 
 // ---------------------------------------------------------------------------
 // Report structures
@@ -33,6 +41,15 @@ pub struct InactivityReport {
     pub skip_analysis: SkipAnalysis,
     pub skip_time_trend: Vec<HourlySkipBucket>,
     pub shadow_analysis: ShadowAnalysis,
+    /// Resolved shadow rows: eligibility gate + exclusion breakdown (full `shadow_trades.jsonl` scan).
+    pub shadow_data_quality: ShadowDataQuality,
+    /// Counterfactual opportunity cells from `skip_reason × asset` (eligible resolved only).
+    pub shadow_opportunity_board_24h: ShadowOpportunityBoard,
+    pub shadow_opportunity_board_72h: ShadowOpportunityBoard,
+    /// Which `config.toml` knobs map to each skip reason (operator guide).
+    pub filter_param_mapping: Vec<FilterParamMapping>,
+    pub tuning_packages: TuningPackagesReport,
+    pub canary_playbook: CanaryPlaybook,
     pub calibration_status: CalibrationSummary,
     pub balance_trend: BalanceTrend,
     pub recommendations: Vec<Recommendation>,
@@ -222,6 +239,7 @@ fn format_recommendations_log_summary(recs: &[Recommendation]) -> String {
 const LOOKBACK_HOURS: u64 = 4;
 const TRADE_LOOKBACK_HOURS: u64 = 24;
 const INACTIVITY_REPORT_FILE: &str = "inactivity_report.json";
+const SKIP_SUMMARY_FILE: &str = "skip_summary.json";
 
 /// Minimum resolved trades per asset to warn about weak recent performance.
 const ASSET_PERF_MIN_TRADES: usize = 3;
@@ -247,12 +265,28 @@ pub fn generate_report(
 
     let skip_analysis = analyze_skips(data_dir, cutoff)?;
     let skip_time_trend = analyze_skip_time_trend(data_dir, cutoff)?;
-    let shadow_analysis = analyze_shadows(data_dir, cutoff)?;
+    let shadow_path = format!("{}/shadow_trades.jsonl", data_dir.trim_end_matches('/'));
+    let all_shadow = read_trades_from_path(&shadow_path)?;
+    let shadow_analysis = analyze_shadows(&all_shadow, cutoff)?;
+    let shadow_data_quality = build_shadow_data_quality(&all_shadow);
+    let cutoff_24 = Utc::now() - Duration::hours(24);
+    let cutoff_72 = Utc::now() - Duration::hours(72);
+    let mut shadow_opportunity_board_24h = build_opportunity_board(&all_shadow, cutoff_24, 24);
+    shadow_opportunity_board_24h
+        .cells
+        .truncate(SHADOW_OPPORTUNITY_BOARD_TOP);
+    let mut shadow_opportunity_board_72h = build_opportunity_board(&all_shadow, cutoff_72, 72);
+    shadow_opportunity_board_72h
+        .cells
+        .truncate(SHADOW_OPPORTUNITY_BOARD_TOP);
+    let filter_param_mapping = filter_param_mapping_matrix();
+    let tuning_packages_report = tuning_packages();
+    let canary = canary_playbook();
     let real_trade_performance = analyze_real_trades(data_dir, trade_cutoff)?;
     let balance_section = check_balance(available_balance, strategies);
     let calibration_status = analyze_calibration(data_dir);
     let balance_trend = analyze_balance_trend(data_dir, trade_cutoff)?;
-    let recommendations = build_recommendations(
+    let mut recommendations = build_recommendations(
         &balance_section,
         &skip_analysis,
         &shadow_analysis,
@@ -260,7 +294,10 @@ pub fn generate_report(
         &balance_trend,
         &calibration_status,
     );
+    append_shadow_opportunity_board_recommendations(&mut recommendations, &shadow_opportunity_board_72h);
     let log_summary = format_recommendations_log_summary(&recommendations);
+
+    write_skip_summary(data_dir)?;
 
     let report = InactivityReport {
         generated_at: Utc::now(),
@@ -270,6 +307,12 @@ pub fn generate_report(
         skip_analysis,
         skip_time_trend,
         shadow_analysis,
+        shadow_data_quality,
+        shadow_opportunity_board_24h,
+        shadow_opportunity_board_72h,
+        filter_param_mapping,
+        tuning_packages: tuning_packages_report,
+        canary_playbook: canary,
         calibration_status,
         balance_trend,
         recommendations,
@@ -287,6 +330,103 @@ pub fn generate_report(
     info!(path = %path, "inactivity diagnostic report generated");
 
     Ok((path, log_summary))
+}
+
+// ---------------------------------------------------------------------------
+// Skip summary (rolling windows for tooling / skills)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SkipSummaryFile {
+    pub generated_at: DateTime<Utc>,
+    pub window_24h: SkipWindowSummary,
+    pub window_72h: SkipWindowSummary,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SkipWindowSummary {
+    pub total_skips: usize,
+    pub reason_distribution: Vec<ReasonCount>,
+    pub top_reason_asset_pairs: Vec<SkipReasonAssetCount>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SkipReasonAssetCount {
+    pub reason: String,
+    pub asset: String,
+    pub count: usize,
+    pub pct: f64,
+}
+
+/// Writes `data/skip_summary.json` with 24h and 72h skip aggregates (full `skip_reasons.jsonl` scan).
+fn write_skip_summary(data_dir: &str) -> Result<()> {
+    let all = read_skip_records(data_dir)?;
+    let now = Utc::now();
+    let w24 = build_skip_window_summary(&all, now - Duration::hours(24));
+    let w72 = build_skip_window_summary(&all, now - Duration::hours(72));
+    let file = SkipSummaryFile {
+        generated_at: now,
+        window_24h: w24,
+        window_72h: w72,
+    };
+    let json =
+        serde_json::to_string_pretty(&file).context("serialize skip_summary.json")?;
+    let path = format!("{}/{}", data_dir.trim_end_matches('/'), SKIP_SUMMARY_FILE);
+    fs_atomic::write_path_atomic(Path::new(&path), json.as_bytes())
+        .with_context(|| format!("write {}", path))?;
+    info!(path = %path, "skip summary written");
+    Ok(())
+}
+
+fn build_skip_window_summary(records: &[SkipRecord], cutoff: DateTime<Utc>) -> SkipWindowSummary {
+    let recent: Vec<&SkipRecord> = records.iter().filter(|s| s.timestamp >= cutoff).collect();
+    let total = recent.len();
+
+    let mut reason_counts: HashMap<String, usize> = HashMap::new();
+    let mut pair_counts: HashMap<(String, String), usize> = HashMap::new();
+
+    for s in &recent {
+        *reason_counts.entry(s.reason.clone()).or_default() += 1;
+        *pair_counts
+            .entry((s.reason.clone(), s.asset.clone()))
+            .or_default() += 1;
+    }
+
+    let mut reason_distribution: Vec<ReasonCount> = reason_counts
+        .iter()
+        .map(|(r, &c)| ReasonCount {
+            reason: r.clone(),
+            count: c,
+            pct: if total > 0 {
+                c as f64 / total as f64 * 100.0
+            } else {
+                0.0
+            },
+        })
+        .collect();
+    reason_distribution.sort_by(|a, b| b.count.cmp(&a.count));
+
+    let mut top_reason_asset_pairs: Vec<SkipReasonAssetCount> = pair_counts
+        .into_iter()
+        .map(|((reason, asset), count)| SkipReasonAssetCount {
+            reason,
+            asset,
+            count,
+            pct: if total > 0 {
+                count as f64 / total as f64 * 100.0
+            } else {
+                0.0
+            },
+        })
+        .collect();
+    top_reason_asset_pairs.sort_by(|a, b| b.count.cmp(&a.count));
+    top_reason_asset_pairs.truncate(40);
+
+    SkipWindowSummary {
+        total_skips: total,
+        reason_distribution,
+        top_reason_asset_pairs,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -371,9 +511,7 @@ fn analyze_skips(data_dir: &str, cutoff: DateTime<Utc>) -> Result<SkipAnalysis> 
 // Shadow trade analysis
 // ---------------------------------------------------------------------------
 
-fn analyze_shadows(data_dir: &str, cutoff: DateTime<Utc>) -> Result<ShadowAnalysis> {
-    let path = format!("{}/shadow_trades.jsonl", data_dir);
-    let all = read_trades_from_path(&path)?;
+fn analyze_shadows(all: &[TradeRecord], cutoff: DateTime<Utc>) -> Result<ShadowAnalysis> {
     let resolved: Vec<&TradeRecord> = all
         .iter()
         .filter(|t| t.outcome.is_some() && t.timestamp >= cutoff)
@@ -754,6 +892,39 @@ fn check_balance(
 // ---------------------------------------------------------------------------
 // Recommendation engine
 // ---------------------------------------------------------------------------
+
+/// Add MEDIUM items from 72h shadow opportunity board (`tier == high`).
+fn append_shadow_opportunity_board_recommendations(
+    recs: &mut Vec<Recommendation>,
+    board: &ShadowOpportunityBoard,
+) {
+    let mut n = 0usize;
+    for c in &board.cells {
+        if c.opportunity_tier != "high" {
+            continue;
+        }
+        if n >= 3 {
+            break;
+        }
+        n += 1;
+        recs.push(Recommendation {
+            asset: Some(c.asset.clone()),
+            priority: "MEDIUM",
+            category: "shadow_opportunity_board",
+            message: format!(
+                "Shadow board ({}h): skip_reason='{}' on {} — n={}, {:.0}% WR, {:.2} USDC PnL, score={:.2}. \
+                 See `filter_param_mapping` + `tuning_packages` in this report.",
+                board.lookback_hours,
+                c.skip_reason,
+                c.asset,
+                c.count,
+                c.wr * 100.0,
+                c.pnl,
+                c.score
+            ),
+        });
+    }
+}
 
 fn build_recommendations(
     balance: &BalanceSection,
