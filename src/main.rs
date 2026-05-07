@@ -115,13 +115,15 @@ async fn main() -> Result<()> {
         &cfg.strategy_version,
     );
 
+    let mut adapt_cycle: u64 = 0;
+
     let base_strategies: std::collections::HashMap<String, polymarket_llm_bot::config::AssetStrategy> = cfg
         .assets
         .iter()
         .map(|a| (a.clone(), cfg.asset_strategy(a)))
         .collect();
 
-    let mut watchdog = InactivityWatchdog::new();
+    let mut watchdog = InactivityWatchdog::new(cfg.inactivity_watchdog.periodic_report_interval_secs);
 
     info!(
         shadow_calibration = cfg.shadow_calibration.enabled,
@@ -244,6 +246,24 @@ async fn main() -> Result<()> {
         }
 
         shadow_calibrator.maybe_recalibrate(&cfg.assets, &base_strategies);
+        adapt_cycle = adapt_cycle.wrapping_add(1);
+        if cfg.liquidity_adapt.enabled {
+            let changed = polymarket_llm_bot::liquidity_adapt::maybe_adapt_liquidity(
+                adapt_cycle,
+                &mut shadow_calibrator.state,
+                &cfg.data_dir,
+                &base_strategies,
+                &cfg.assets,
+                &cfg.liquidity_adapt,
+                &cfg.shadow_calibration,
+                &cfg.strategy_version,
+            );
+            if changed {
+                if let Err(e) = shadow_calibrator.persist_state() {
+                    warn!(error = %e, "failed to persist calibration after liquidity_adapt");
+                }
+            }
+        }
     }
 }
 

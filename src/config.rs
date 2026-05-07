@@ -10,6 +10,41 @@ use crate::constants::{
     GAMMA_TAG_ID_DEFAULT, MIN_CANDLES_FOR_SIGNAL, MIN_LIQUIDITY_USDC, SLIPPAGE_BPS,
 };
 use crate::shadow_calibrator::ShadowCalibrationConfig;
+
+/// Rolling skip-window adaptation for [`AssetStrategy::min_liquidity_usdc`].
+#[derive(Debug, Clone)]
+pub struct LiquidityAdaptConfig {
+    pub enabled: bool,
+    pub window_n: usize,
+    pub loosen_share_threshold: f64,
+    pub tighten_share_threshold: f64,
+    pub step_down_pct: f64,
+    pub step_up_pct: f64,
+    pub floor_usdc: Decimal,
+    pub ceiling_multiplier: f64,
+    pub cooldown_cycles: u64,
+    pub min_skips_in_window: usize,
+    /// Max bytes to read from the end of `skip_reasons.jsonl` per cycle (tail parse).
+    pub tail_read_bytes: u64,
+}
+
+impl Default for LiquidityAdaptConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            window_n: 150,
+            loosen_share_threshold: 0.45,
+            tighten_share_threshold: 0.15,
+            step_down_pct: 0.15,
+            step_up_pct: 0.10,
+            floor_usdc: dec!(800),
+            ceiling_multiplier: 1.0,
+            cooldown_cycles: 5,
+            min_skips_in_window: 30,
+            tail_read_bytes: 8 * 1024 * 1024,
+        }
+    }
+}
 use crate::signals::SignalConfig;
 use crate::types::Direction;
 use crate::volatility::VolatilityFilterConfig;
@@ -162,11 +197,33 @@ pub struct AppConfig {
     pub taker_neutral_low: f64,
     pub taker_neutral_high: f64,
 
+    /// Auto-adjust `min_liquidity_usdc` from recent skip_reasons (per asset).
+    pub liquidity_adapt: LiquidityAdaptConfig,
+
     /// Shadow calibration configuration.
     pub shadow_calibration: ShadowCalibrationConfig,
 
+    /// Inactivity watchdog / diagnostic report scheduling.
+    pub inactivity_watchdog: InactivityWatchdogConfig,
+
     /// Parsed `config.toml` for per-asset TOML fallbacks (environment still wins).
     pub(crate) toml: Option<Arc<TomlRoot>>,
+}
+
+/// Periodic diagnostic report and watchdog-related settings.
+#[derive(Debug, Clone)]
+pub struct InactivityWatchdogConfig {
+    /// If &gt; 0, request `inactivity_report.json` on this wall-clock interval (seconds)
+    /// even when the bot is actively trading. `0` disables periodic reports.
+    pub periodic_report_interval_secs: u64,
+}
+
+impl Default for InactivityWatchdogConfig {
+    fn default() -> Self {
+        Self {
+            periodic_report_interval_secs: 2 * 3600,
+        }
+    }
 }
 
 /// Polymarket signature types
@@ -1354,6 +1411,68 @@ impl AppConfig {
                 0.55,
             ),
 
+            liquidity_adapt: {
+                let la = r.and_then(|x| x.liquidity_adapt.as_ref());
+                let d = LiquidityAdaptConfig::default();
+                LiquidityAdaptConfig {
+                    enabled: env_toml_bool(
+                        "LIQUIDITY_ADAPT_ENABLED",
+                        la.and_then(|s| s.enabled),
+                        d.enabled,
+                    ),
+                    window_n: env_toml_usize(
+                        "LIQUIDITY_ADAPT_WINDOW_N",
+                        la.and_then(|s| s.window_n),
+                        d.window_n,
+                    ),
+                    loosen_share_threshold: env_toml_f64(
+                        "LIQUIDITY_ADAPT_LOOSEN_SHARE_THRESHOLD",
+                        la.and_then(|s| s.loosen_share_threshold),
+                        d.loosen_share_threshold,
+                    ),
+                    tighten_share_threshold: env_toml_f64(
+                        "LIQUIDITY_ADAPT_TIGHTEN_SHARE_THRESHOLD",
+                        la.and_then(|s| s.tighten_share_threshold),
+                        d.tighten_share_threshold,
+                    ),
+                    step_down_pct: env_toml_f64(
+                        "LIQUIDITY_ADAPT_STEP_DOWN_PCT",
+                        la.and_then(|s| s.step_down_pct),
+                        d.step_down_pct,
+                    ),
+                    step_up_pct: env_toml_f64(
+                        "LIQUIDITY_ADAPT_STEP_UP_PCT",
+                        la.and_then(|s| s.step_up_pct),
+                        d.step_up_pct,
+                    ),
+                    floor_usdc: env_toml_decimal(
+                        "LIQUIDITY_ADAPT_FLOOR_USDC",
+                        parse_dec_str(&la.and_then(|s| s.floor_usdc.clone())),
+                        d.floor_usdc,
+                    ),
+                    ceiling_multiplier: env_toml_f64(
+                        "LIQUIDITY_ADAPT_CEILING_MULTIPLIER",
+                        la.and_then(|s| s.ceiling_multiplier),
+                        d.ceiling_multiplier,
+                    ),
+                    cooldown_cycles: std::env::var("LIQUIDITY_ADAPT_COOLDOWN_CYCLES")
+                        .ok()
+                        .and_then(|v| v.parse().ok())
+                        .or(la.and_then(|s| s.cooldown_cycles))
+                        .unwrap_or(d.cooldown_cycles),
+                    min_skips_in_window: env_toml_usize(
+                        "LIQUIDITY_ADAPT_MIN_SKIPS_IN_WINDOW",
+                        la.and_then(|s| s.min_skips_in_window),
+                        d.min_skips_in_window,
+                    ),
+                    tail_read_bytes: std::env::var("LIQUIDITY_ADAPT_TAIL_READ_BYTES")
+                        .ok()
+                        .and_then(|v| v.parse().ok())
+                        .or(la.and_then(|s| s.tail_read_bytes))
+                        .unwrap_or(d.tail_read_bytes),
+                }
+            },
+
             shadow_calibration: {
                 let sc = r.and_then(|x| x.shadow_calibration.as_ref());
                 ShadowCalibrationConfig {
@@ -1445,6 +1564,20 @@ impl AppConfig {
                         sc.and_then(|s| s.live_direction_veto_wr),
                         0.30,
                     ),
+                }
+            },
+
+            inactivity_watchdog: {
+                let iw = r.and_then(|x| x.inactivity_watchdog.as_ref());
+                let d = InactivityWatchdogConfig::default();
+                InactivityWatchdogConfig {
+                    periodic_report_interval_secs: std::env::var(
+                        "INACTIVITY_PERIODIC_REPORT_SECS",
+                    )
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .or(iw.and_then(|s| s.periodic_report_interval_secs))
+                    .unwrap_or(d.periodic_report_interval_secs),
                 }
             },
 
@@ -2095,6 +2228,66 @@ impl AppConfig {
             );
         }
 
+        let la = &self.liquidity_adapt;
+        if la.enabled {
+            if la.window_n < 5 {
+                anyhow::bail!("LIQUIDITY_ADAPT_WINDOW_N must be >= 5, got {}", la.window_n);
+            }
+            if la.loosen_share_threshold <= la.tighten_share_threshold {
+                anyhow::bail!(
+                    "LIQUIDITY_ADAPT loosen threshold ({}) must be > tighten ({})",
+                    la.loosen_share_threshold,
+                    la.tighten_share_threshold
+                );
+            }
+            if !(la.loosen_share_threshold > 0.0 && la.loosen_share_threshold < 1.0) {
+                anyhow::bail!(
+                    "LIQUIDITY_ADAPT_LOOSEN_SHARE_THRESHOLD must be in (0, 1)"
+                );
+            }
+            if !(la.tighten_share_threshold >= 0.0 && la.tighten_share_threshold < 1.0) {
+                anyhow::bail!(
+                    "LIQUIDITY_ADAPT_TIGHTEN_SHARE_THRESHOLD must be in [0, 1)"
+                );
+            }
+            if la.step_down_pct <= 0.0 || la.step_down_pct >= 0.95 {
+                anyhow::bail!(
+                    "LIQUIDITY_ADAPT_STEP_DOWN_PCT must be in (0, 0.95), got {}",
+                    la.step_down_pct
+                );
+            }
+            if la.step_up_pct <= 0.0 || la.step_up_pct >= 0.95 {
+                anyhow::bail!(
+                    "LIQUIDITY_ADAPT_STEP_UP_PCT must be in (0, 0.95), got {}",
+                    la.step_up_pct
+                );
+            }
+            if la.floor_usdc <= Decimal::ZERO {
+                anyhow::bail!(
+                    "LIQUIDITY_ADAPT_FLOOR_USDC must be positive, got {}",
+                    la.floor_usdc
+                );
+            }
+            if la.ceiling_multiplier < 1.0 || la.ceiling_multiplier > 2.0 {
+                anyhow::bail!(
+                    "LIQUIDITY_ADAPT_CEILING_MULTIPLIER must be in [1.0, 2.0], got {}",
+                    la.ceiling_multiplier
+                );
+            }
+            if la.min_skips_in_window < 5 {
+                anyhow::bail!(
+                    "LIQUIDITY_ADAPT_MIN_SKIPS_IN_WINDOW must be >= 5, got {}",
+                    la.min_skips_in_window
+                );
+            }
+            if la.tail_read_bytes < 4096 {
+                anyhow::bail!(
+                    "LIQUIDITY_ADAPT_TAIL_READ_BYTES must be >= 4096, got {}",
+                    la.tail_read_bytes
+                );
+            }
+        }
+
         self.validate_polymarket_auth()?;
 
         Ok(())
@@ -2203,7 +2396,11 @@ impl Default for AppConfig {
             taker_neutral_low: 0.45,
             taker_neutral_high: 0.55,
 
+            liquidity_adapt: LiquidityAdaptConfig::default(),
+
             shadow_calibration: ShadowCalibrationConfig::default(),
+
+            inactivity_watchdog: InactivityWatchdogConfig::default(),
 
             toml: None,
         }

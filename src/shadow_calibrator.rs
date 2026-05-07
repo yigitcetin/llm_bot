@@ -113,6 +113,8 @@ pub struct CalibratedOverrides {
     pub htf_enabled: Option<bool>,
     pub dynamic_momentum_threshold: Option<bool>,
     pub multi_tf_enabled: Option<bool>,
+    /// Effective minimum market liquidity (USDC). Lower = loosen execution filter.
+    pub min_liquidity_usdc: Option<f64>,
 }
 
 impl CalibratedOverrides {
@@ -153,6 +155,7 @@ impl CalibratedOverrides {
         merge_opt!(htf_enabled);
         merge_opt!(dynamic_momentum_threshold);
         merge_opt!(multi_tf_enabled);
+        merge_opt!(min_liquidity_usdc);
     }
 
     pub fn is_empty(&self) -> bool {
@@ -183,6 +186,7 @@ impl CalibratedOverrides {
             && self.htf_enabled.is_none()
             && self.dynamic_momentum_threshold.is_none()
             && self.multi_tf_enabled.is_none()
+            && self.min_liquidity_usdc.is_none()
     }
 }
 
@@ -269,6 +273,10 @@ pub fn apply_overrides(base: &mut AssetStrategy, ov: &CalibratedOverrides) {
     if let Some(v) = ov.multi_tf_enabled {
         base.multi_tf_enabled = v;
     }
+    if let Some(v) = ov.min_liquidity_usdc {
+        base.min_liquidity_usdc =
+            Decimal::from_f64_retain(v).unwrap_or(base.min_liquidity_usdc);
+    }
 }
 
 /// Restore cross-field invariants after applying calibrator overrides (swap/clamp; never reject).
@@ -342,6 +350,13 @@ pub struct BaseSnapshot {
     pub htf_enabled: bool,
     pub dynamic_momentum_threshold: bool,
     pub multi_tf_enabled: bool,
+    /// Base `min_liquidity_usdc` from config when this snapshot was taken.
+    #[serde(default = "default_base_min_liquidity_usdc")]
+    pub min_liquidity_usdc: f64,
+}
+
+fn default_base_min_liquidity_usdc() -> f64 {
+    3_000.0
 }
 
 impl BaseSnapshot {
@@ -374,6 +389,7 @@ impl BaseSnapshot {
             htf_enabled: st.htf_enabled,
             dynamic_momentum_threshold: st.dynamic_momentum_threshold,
             multi_tf_enabled: st.multi_tf_enabled,
+            min_liquidity_usdc: st.min_liquidity_usdc.to_f64().unwrap_or(3_000.0),
         }
     }
 }
@@ -385,6 +401,9 @@ pub struct CalibrationStateFile {
     /// Latest `AppConfig.strategy_version` reflected in this file (set on save).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub strategy_version: Option<String>,
+    /// Main-loop cycle index when each asset last had a liquidity adaptation step applied.
+    #[serde(default)]
+    pub liquidity_adapt_last_cycle: HashMap<String, u64>,
 }
 
 // ---------------------------------------------------------------------------
@@ -630,6 +649,10 @@ fn classify_override_direction(
         let cur = current.multi_tf_enabled.unwrap_or(base.multi_tf_enabled);
         consider(!v && cur);
     }
+    if let Some(v) = delta.min_liquidity_usdc {
+        let cur = current.min_liquidity_usdc.unwrap_or(base.min_liquidity_usdc);
+        consider(v < cur - 1e-12);
+    }
 
     match (loosen, tighten) {
         (0, 0) => "none",
@@ -842,6 +865,13 @@ fn filter_live_veto_loosening(
         let cur = current.multi_tf_enabled.unwrap_or(base.multi_tf_enabled);
         if !v && cur {
             delta.multi_tf_enabled = None;
+            stripped = true;
+        }
+    }
+    if let Some(v) = delta.min_liquidity_usdc {
+        let cur = current.min_liquidity_usdc.unwrap_or(base.min_liquidity_usdc);
+        if v < cur - 1e-12 {
+            delta.min_liquidity_usdc = None;
             stripped = true;
         }
     }
@@ -1541,6 +1571,10 @@ impl ShadowCalibrator {
             .with_context(|| format!("parse calibration state: {}", path))
     }
 
+    pub fn persist_state(&mut self) -> Result<()> {
+        self.save_state()
+    }
+
     fn save_state(&mut self) -> Result<()> {
         self.state.strategy_version = Some(self.strategy_version.clone());
         let json = serde_json::to_string_pretty(&self.state)
@@ -1861,6 +1895,18 @@ mod tests {
         assert!(diff < dec!(0.0001), "min_edge should be ~0.05, got {}", st.min_edge);
         assert_eq!(st.rsi_yes_max, 75.0);
         assert_eq!(st.min_confidence, dec!(0.70));
+    }
+
+    #[test]
+    fn overrides_apply_min_liquidity() {
+        let mut st = default_test_strategy();
+        let ov = CalibratedOverrides {
+            min_liquidity_usdc: Some(1200.0),
+            ..Default::default()
+        };
+        apply_overrides(&mut st, &ov);
+        let diff = (st.min_liquidity_usdc - dec!(1200)).abs();
+        assert!(diff < dec!(0.0001));
     }
 
     fn default_test_strategy() -> AssetStrategy {

@@ -6,9 +6,11 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use tracing::{info, warn};
 
+use rust_decimal::prelude::ToPrimitive;
+
 use crate::config::AppConfig;
 use crate::fs_atomic;
-use crate::types::OpenPosition;
+use crate::types::{Direction, OpenPosition};
 
 /// Persisted balance snapshot written to `data/balance_state.json`.
 #[derive(Debug, Serialize, Deserialize)]
@@ -18,9 +20,51 @@ struct BalanceState {
     /// `AppConfig.strategy_version` when this snapshot was written (`None` in legacy files).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     strategy_version: Option<String>,
+    /// Peak balance observed for drawdown (`None` in legacy files — treated as `balance` on load).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    peak_balance: Option<Decimal>,
+    /// Approximate drawdown from peak: `max(0, 1 - balance/peak)` as fraction (0..=1).
+    #[serde(default)]
+    current_drawdown_pct: f64,
+    #[serde(default)]
+    open_position_count: usize,
+    #[serde(default)]
+    total_exposure_usdc: Decimal,
+    /// Sum of realized PnL from closed trades for `daily_counters_utc_date` (UTC calendar day).
+    #[serde(default)]
+    daily_realized_pnl: Decimal,
+    /// Resolved (closed) trades counted for `daily_counters_utc_date`.
+    #[serde(default)]
+    resolved_trades_today: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    last_trade_resolution_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// UTC date for which `daily_realized_pnl` / `resolved_trades_today` are valid.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    daily_counters_utc_date: Option<chrono::NaiveDate>,
+}
+
+#[derive(Debug, Serialize)]
+struct OpenPositionsFile {
+    updated_at: chrono::DateTime<chrono::Utc>,
+    strategy_version: String,
+    count: usize,
+    total_exposure_usdc: Decimal,
+    positions: Vec<OpenPositionRow>,
+}
+
+#[derive(Debug, Serialize)]
+struct OpenPositionRow {
+    condition_id: String,
+    order_id: String,
+    direction: String,
+    entry_price: Decimal,
+    size_usdc: Decimal,
+    size_shares: Decimal,
+    end_date_ms: i64,
 }
 
 const BALANCE_STATE_FILE: &str = "balance_state.json";
+const OPEN_POSITIONS_FILE: &str = "open_positions.json";
 
 /// Why [`RiskManager`] refused a new trade (for skip logging / metrics).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,6 +90,13 @@ pub struct RiskManager {
     balance: Decimal,
     daily_loss_limit: Decimal,
     daily_loss: Decimal,
+    /// Highest balance observed this process / restored from disk (for drawdown).
+    peak_balance: Decimal,
+    /// Realized PnL from resolutions today (UTC day, see `last_reset`).
+    daily_realized_pnl: Decimal,
+    /// Count of resolved trades today (UTC).
+    resolved_trades_today: u64,
+    last_trade_resolution_at: Option<chrono::DateTime<chrono::Utc>>,
     open_positions: HashMap<String, OpenPosition>,
     /// USDC reserved for GTD limit orders not yet confirmed filled (`condition_id` -> amount).
     reserved_usdc: HashMap<String, Decimal>,
@@ -76,42 +127,115 @@ impl RiskManager {
             );
         }
 
-        let rm = Self {
+        let today = chrono::Utc::now().date_naive();
+        let persisted = read_balance_state_full(&data_dir);
+        let (peak_balance, daily_realized_pnl, resolved_today, last_res, last_reset) =
+            if let Some(s) = persisted {
+                let peak = s
+                    .peak_balance
+                    .unwrap_or(s.balance)
+                    .max(starting_balance);
+                let counter_date = s.daily_counters_utc_date.unwrap_or(today);
+                if counter_date == today {
+                    (
+                        peak,
+                        s.daily_realized_pnl,
+                        s.resolved_trades_today,
+                        s.last_trade_resolution_at,
+                        today,
+                    )
+                } else {
+                    (
+                        peak,
+                        Decimal::ZERO,
+                        0,
+                        s.last_trade_resolution_at,
+                        counter_date,
+                    )
+                }
+            } else {
+                (
+                    starting_balance,
+                    Decimal::ZERO,
+                    0,
+                    None,
+                    today,
+                )
+            };
+
+        let mut rm = Self {
             balance: starting_balance,
             daily_loss_limit: starting_balance * cfg.daily_loss_limit_pct,
             daily_loss: Decimal::ZERO,
+            peak_balance,
+            daily_realized_pnl,
+            resolved_trades_today: resolved_today,
+            last_trade_resolution_at: last_res,
             open_positions: HashMap::new(),
             reserved_usdc: HashMap::new(),
             reserved_markets: HashSet::new(),
-            last_reset: chrono::Utc::now().date_naive(),
+            last_reset,
             data_dir: Some(data_dir),
             strategy_version: cfg.strategy_version.trim().to_string(),
         };
-        rm.persist_balance();
+        rm.maybe_reset_daily();
+        rm.persist_disk_state();
         rm
     }
 
     /// Test-only constructor that skips balance persistence.
     #[cfg(test)]
     pub(crate) fn new_without_persistence(cfg: &AppConfig) -> Self {
+        let today = chrono::Utc::now().date_naive();
         Self {
             balance: cfg.initial_balance,
             daily_loss_limit: cfg.initial_balance * cfg.daily_loss_limit_pct,
             daily_loss: Decimal::ZERO,
+            peak_balance: cfg.initial_balance,
+            daily_realized_pnl: Decimal::ZERO,
+            resolved_trades_today: 0,
+            last_trade_resolution_at: None,
             open_positions: HashMap::new(),
             reserved_usdc: HashMap::new(),
             reserved_markets: HashSet::new(),
-            last_reset: chrono::Utc::now().date_naive(),
+            last_reset: today,
             data_dir: None,
             strategy_version: cfg.strategy_version.trim().to_string(),
         }
     }
 
-    /// Persist current balance to `data/balance_state.json`.
-    fn persist_balance(&self) {
-        let Some(dir) = &self.data_dir else { return };
-        if let Err(e) = save_balance_state(dir, self.balance, &self.strategy_version) {
+    /// Persist `balance_state.json` and `open_positions.json`.
+    fn persist_disk_state(&mut self) {
+        let Some(dir) = self.data_dir.clone() else { return };
+        self.maybe_reset_daily();
+        self.peak_balance = self.peak_balance.max(self.balance);
+        let drawdown_pct = drawdown_fraction(self.balance, self.peak_balance);
+        let exposure: Decimal = self
+            .open_positions
+            .values()
+            .map(|p| p.size_usdc)
+            .sum();
+        if let Err(e) = save_balance_state(
+            &dir,
+            self.balance,
+            &self.strategy_version,
+            self.peak_balance,
+            drawdown_pct,
+            self.open_positions.len(),
+            exposure,
+            self.daily_realized_pnl,
+            self.resolved_trades_today,
+            self.last_trade_resolution_at,
+            self.last_reset,
+        ) {
             warn!(error = %e, "failed to persist balance state");
+        }
+        if let Err(e) = save_open_positions(
+            &dir,
+            &self.strategy_version,
+            &self.open_positions,
+        ) {
+            warn!(error = %e, "failed to persist open positions");
         }
     }
 
@@ -185,14 +309,14 @@ impl RiskManager {
         self.reserved_usdc
             .insert(condition_id.to_string(), size_usdc);
         self.reserved_markets.insert(condition_id.to_string());
-        self.persist_balance();
+        self.persist_disk_state();
     }
 
     /// Release reservation when the order is cancelled/expired without a confirmed position.
     pub fn release_reservation(&mut self, condition_id: &str) {
         if let Some(amt) = self.reserved_usdc.remove(condition_id) {
             self.balance += amt;
-            self.persist_balance();
+            self.persist_disk_state();
         }
         self.reserved_markets.remove(condition_id);
     }
@@ -203,6 +327,7 @@ impl RiskManager {
         self.reserved_markets.remove(condition_id);
         self.open_positions
             .insert(position.condition_id.clone(), position);
+        self.persist_disk_state();
     }
 
     /// Call when an order is placed and filled immediately (no prior reservation), or dry-run.
@@ -210,7 +335,7 @@ impl RiskManager {
         self.balance -= size_usdc;
         self.open_positions
             .insert(position.condition_id.clone(), position);
-        self.persist_balance();
+        self.persist_disk_state();
     }
 
     /// True if we have an open position or reserved resting order for this market.
@@ -223,6 +348,8 @@ impl RiskManager {
     pub fn record_resolution(&mut self, pos: &OpenPosition, pnl: Decimal) {
         self.open_positions.remove(&pos.condition_id);
 
+        self.maybe_reset_daily();
+
         // Stake returned + PnL (negative PnL = loss).
         self.balance += pos.size_usdc + pnl;
 
@@ -230,7 +357,10 @@ impl RiskManager {
             self.daily_loss += pnl.abs();
         }
 
-        self.persist_balance();
+        self.daily_realized_pnl += pnl;
+        self.resolved_trades_today = self.resolved_trades_today.saturating_add(1);
+        self.last_trade_resolution_at = Some(chrono::Utc::now());
+        self.persist_disk_state();
 
         tracing::info!(
             condition_id = %pos.condition_id,
@@ -246,13 +376,18 @@ impl RiskManager {
     /// The persisted balance already had the stake deducted, so we credit
     /// stake + PnL back.
     pub fn credit_file_resolution(&mut self, size_usdc: Decimal, pnl: Decimal) {
+        self.maybe_reset_daily();
+
         self.balance += size_usdc + pnl;
 
         if pnl < Decimal::ZERO {
             self.daily_loss += pnl.abs();
         }
 
-        self.persist_balance();
+        self.daily_realized_pnl += pnl;
+        self.resolved_trades_today = self.resolved_trades_today.saturating_add(1);
+        self.last_trade_resolution_at = Some(chrono::Utc::now());
+        self.persist_disk_state();
 
         tracing::info!(
             size_usdc = %size_usdc,
@@ -266,6 +401,8 @@ impl RiskManager {
         let today = chrono::Utc::now().date_naive();
         if today > self.last_reset {
             self.daily_loss = Decimal::ZERO;
+            self.daily_realized_pnl = Decimal::ZERO;
+            self.resolved_trades_today = 0;
             self.last_reset = today;
             tracing::info!("daily loss counter reset");
         }
@@ -284,25 +421,97 @@ fn balance_state_path(data_dir: &Path) -> PathBuf {
     data_dir.join(BALANCE_STATE_FILE)
 }
 
-fn load_balance_state(data_dir: &Path) -> Option<Decimal> {
-    let path = balance_state_path(data_dir);
-    let content = std::fs::read_to_string(&path).ok()?;
-    let state: BalanceState = serde_json::from_str(&content)
-        .map_err(|e| warn!(error = %e, "corrupt balance_state.json, using initial_balance"))
-        .ok()?;
-    Some(state.balance)
+fn open_positions_path(data_dir: &Path) -> PathBuf {
+    data_dir.join(OPEN_POSITIONS_FILE)
 }
 
-fn save_balance_state(data_dir: &Path, balance: Decimal, strategy_version: &str) -> anyhow::Result<()> {
+fn read_balance_state_full(data_dir: &Path) -> Option<BalanceState> {
+    let path = balance_state_path(data_dir);
+    let content = std::fs::read_to_string(&path).ok()?;
+    serde_json::from_str::<BalanceState>(&content)
+        .map_err(|e| warn!(error = %e, "corrupt balance_state.json, ignoring extended fields"))
+        .ok()
+}
+
+fn load_balance_state(data_dir: &Path) -> Option<Decimal> {
+    read_balance_state_full(data_dir).map(|s| s.balance)
+}
+
+fn drawdown_fraction(balance: Decimal, peak: Decimal) -> f64 {
+    if peak <= Decimal::ZERO {
+        return 0.0;
+    }
+    let one = Decimal::ONE;
+    let raw = one - (balance / peak);
+    raw.max(Decimal::ZERO).to_f64().unwrap_or(0.0)
+}
+
+fn save_balance_state(
+    data_dir: &Path,
+    balance: Decimal,
+    strategy_version: &str,
+    peak_balance: Decimal,
+    current_drawdown_pct: f64,
+    open_position_count: usize,
+    total_exposure_usdc: Decimal,
+    daily_realized_pnl: Decimal,
+    resolved_trades_today: u64,
+    last_trade_resolution_at: Option<chrono::DateTime<chrono::Utc>>,
+    daily_counters_utc_date: chrono::NaiveDate,
+) -> anyhow::Result<()> {
     let state = BalanceState {
         balance,
         updated_at: chrono::Utc::now(),
         strategy_version: Some(strategy_version.trim().to_string()),
+        peak_balance: Some(peak_balance),
+        current_drawdown_pct,
+        open_position_count,
+        total_exposure_usdc,
+        daily_realized_pnl,
+        resolved_trades_today,
+        last_trade_resolution_at,
+        daily_counters_utc_date: Some(daily_counters_utc_date),
     };
     let json = serde_json::to_string_pretty(&state)?;
     let path = balance_state_path(data_dir);
     fs_atomic::write_path_atomic(&path, json.as_bytes())
         .context("atomic write balance_state.json")?;
+    Ok(())
+}
+
+fn save_open_positions(
+    data_dir: &Path,
+    strategy_version: &str,
+    open_positions: &HashMap<String, OpenPosition>,
+) -> anyhow::Result<()> {
+    let exposure: Decimal = open_positions.values().map(|p| p.size_usdc).sum();
+    let positions: Vec<OpenPositionRow> = open_positions
+        .values()
+        .map(|p| OpenPositionRow {
+            condition_id: p.condition_id.clone(),
+            order_id: p.order_id.clone(),
+            direction: match p.direction {
+                Direction::Yes => "YES".to_string(),
+                Direction::No => "NO".to_string(),
+            },
+            entry_price: p.entry_price,
+            size_usdc: p.size_usdc,
+            size_shares: p.size_shares,
+            end_date_ms: p.end_date_ms,
+        })
+        .collect();
+
+    let file = OpenPositionsFile {
+        updated_at: chrono::Utc::now(),
+        strategy_version: strategy_version.trim().to_string(),
+        count: positions.len(),
+        total_exposure_usdc: exposure,
+        positions,
+    };
+    let json = serde_json::to_string_pretty(&file)?;
+    let path = open_positions_path(data_dir);
+    fs_atomic::write_path_atomic(&path, json.as_bytes())
+        .context("atomic write open_positions.json")?;
     Ok(())
 }
 
@@ -458,7 +667,21 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("risk_test_{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("mkdir");
         let balance = dec!(548.94);
-        save_balance_state(&dir, balance, "1").expect("save");
+        let today = chrono::Utc::now().date_naive();
+        save_balance_state(
+            &dir,
+            balance,
+            "1",
+            balance,
+            0.0,
+            0,
+            dec!(0),
+            dec!(0),
+            0,
+            None,
+            today,
+        )
+        .expect("save");
         let loaded = load_balance_state(&dir).expect("load");
         assert_eq!(loaded, balance);
         let _ = std::fs::remove_dir_all(&dir);
@@ -476,7 +699,10 @@ mod tests {
     fn persisted_or_config_balance_prefers_file() {
         let dir = std::env::temp_dir().join(format!("risk_persist_cfg_{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("mkdir");
-        save_balance_state(&dir, dec!(333.12), "1").expect("save");
+        let b = dec!(333.12);
+        let today = chrono::Utc::now().date_naive();
+        save_balance_state(&dir, b, "1", b, 0.0, 0, dec!(0), dec!(0), 0, None, today)
+            .expect("save");
 
         let mut cfg = test_cfg();
         cfg.data_dir = dir.to_string_lossy().into_owned();

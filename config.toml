@@ -12,7 +12,7 @@ min_order_usdc = "10"
 min_order_usdc_floor = "2"
 slippage_bps = "0.002"
 # Bump when changing strategy params — logged on trades and persisted state files.
-strategy_version = "1"
+strategy_version = "4"
 
 [technical]
 spot_exchange = "binance"
@@ -38,7 +38,7 @@ mom15_abs = 0.005
 min_market_yes_price = "0.08"
 max_market_yes_price = "0.53"
 min_secs_to_close = 350
-min_liquidity = "3000"
+min_liquidity = "1500"
 cluster_tie_min_edge_multiplier = 1.5
 min_momentum_5m_abs = 0.0001
 neutral_taker_edge_multiplier = 1.5
@@ -78,7 +78,7 @@ initial_balance = "200"
 enabled = true
 interval = "15m"
 # Must be >= MIN_CANDLES_FOR_SIGNAL (100) when HTF is on — see AssetStrategy::validate / constants.
-lookback = 100
+lookback = 150
 ema_period = 20
 
 [adaptive]
@@ -95,9 +95,13 @@ clob_host = "https://clob.polymarket.com"
 signature_type = "GNOSIS_SAFE"
 data_dir = "data"
 
+# Periodic inactivity_report.json + skip_summary.json refresh while trading (0 = disable).
+[inactivity_watchdog]
+periodic_report_interval_secs = 7200
+
 [asset.btc]
 min_edge = "0.03"
-min_confidence = "0.75"
+min_confidence = "0.72"
 candle_lookback = 200
 volume_min_ratio = 0.6
 vol_min_std_pct = "0.020"
@@ -112,7 +116,7 @@ taker_neutral_high = 0.60
 cheap_token_max_usdc = "10"
 
 [asset.eth]
-min_edge = "0.03"
+min_edge = "0.025"
 min_confidence = "0.72"
 min_secs_to_close = 400
 candle_lookback = 150
@@ -197,6 +201,18 @@ adaptive_penalty_window = 10
 multi_tf_enabled = true
 multi_tf_interval = "5m"
 multi_tf_lookback = 120
+
+[liquidity_adapt]
+enabled = true
+window_n = 150
+loosen_share_threshold = 0.35
+tighten_share_threshold = 0.15
+step_down_pct = 0.20
+step_up_pct = 0.10
+floor_usdc = "800"
+ceiling_multiplier = 1.0
+cooldown_cycles = 5
+min_skips_in_window = 20
 
 [shadow_calibration]
 enabled = true

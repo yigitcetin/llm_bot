@@ -1,0 +1,1557 @@
+{
+  "generated_at": "2026-05-07T04:50:29.103698900Z",
+  "lookback_hours": 4,
+  "balance": {
+    "available_balance": "389.96814707307965005045486435",
+    "deadlock_detected": false,
+    "max_order_usdc": "19.50",
+    "min_order_usdc": "10",
+    "min_order_usdc_floor": "2",
+    "dynamic_min": "10"
+  },
+  "real_trade_performance": {
+    "lookback_hours": 24,
+    "total_trades": 15,
+    "resolved": 15,
+    "pending": 0,
+    "wr": 0.8,
+    "pnl": 111.1964719079759,
+    "per_asset": [
+      {
+        "asset": "bnb",
+        "count": 7,
+        "wr": 0.8571428571428571,
+        "pnl": 65.98349839473254
+      },
+      {
+        "asset": "eth",
+        "count": 4,
+        "wr": 0.75,
+        "pnl": 19.81384307846077
+      },
+      {
+        "asset": "sol",
+        "count": 1,
+        "wr": 1.0,
+        "pnl": 15.1
+      },
+      {
+        "asset": "btc",
+        "count": 1,
+        "wr": 1.0,
+        "pnl": 11.73913043478261
+      },
+      {
+        "asset": "xrp",
+        "count": 1,
+        "wr": 1.0,
+        "pnl": 11.52
+      },
+      {
+        "asset": "doge",
+        "count": 1,
+        "wr": 0.0,
+        "pnl": -12.96
+      }
+    ],
+    "per_asset_direction": [
+      {
+        "asset": "bnb",
+        "yes_count": 7,
+        "yes_wr": 0.8571428571428571,
+        "no_count": 0,
+        "no_wr": 0.0
+      },
+      {
+        "asset": "btc",
+        "yes_count": 1,
+        "yes_wr": 1.0,
+        "no_count": 0,
+        "no_wr": 0.0
+      },
+      {
+        "asset": "doge",
+        "yes_count": 0,
+        "yes_wr": 0.0,
+        "no_count": 1,
+        "no_wr": 0.0
+      },
+      {
+        "asset": "eth",
+        "yes_count": 2,
+        "yes_wr": 0.5,
+        "no_count": 2,
+        "no_wr": 1.0
+      },
+      {
+        "asset": "sol",
+        "yes_count": 0,
+        "yes_wr": 0.0,
+        "no_count": 1,
+        "no_wr": 1.0
+      },
+      {
+        "asset": "xrp",
+        "yes_count": 0,
+        "yes_wr": 0.0,
+        "no_count": 1,
+        "no_wr": 1.0
+      }
+    ],
+    "last_trade_at": "2026-05-07T00:49:50.874956600Z",
+    "hours_since_last_trade": 4.0
+  },
+  "skip_analysis": {
+    "total_skips": 1428,
+    "reason_distribution": [
+      {
+        "reason": "market_yes_price_out_of_band",
+        "count": 518,
+        "pct": 36.27450980392157
+      },
+      {
+        "reason": "liquidity_too_low",
+        "count": 362,
+        "pct": 25.350140056022408
+      },
+      {
+        "reason": "too_far_from_expiry",
+        "count": 279,
+        "pct": 19.537815126050422
+      },
+      {
+        "reason": "too_close_to_expiry",
+        "count": 202,
+        "pct": 14.145658263305322
+      },
+      {
+        "reason": "spot_volume_below_threshold",
+        "count": 34,
+        "pct": 2.380952380952381
+      },
+      {
+        "reason": "already_have_open_position",
+        "count": 8,
+        "pct": 0.5602240896358543
+      },
+      {
+        "reason": "macd_histogram_too_weak",
+        "count": 8,
+        "pct": 0.5602240896358543
+      },
+      {
+        "reason": "edge_too_small",
+        "count": 4,
+        "pct": 0.2801120448179272
+      },
+      {
+        "reason": "no_edge_after_direction_override",
+        "count": 4,
+        "pct": 0.2801120448179272
+      },
+      {
+        "reason": "direction_confidence_penalized",
+        "count": 3,
+        "pct": 0.21008403361344538
+      },
+      {
+        "reason": "adaptive_direction_blocked",
+        "count": 2,
+        "pct": 0.1400560224089636
+      },
+      {
+        "reason": "momentum_5m_too_weak",
+        "count": 2,
+        "pct": 0.1400560224089636
+      },
+      {
+        "reason": "rsi_yes_over_max",
+        "count": 1,
+        "pct": 0.0700280112044818
+      },
+      {
+        "reason": "rsi_no_below_min",
+        "count": 1,
+        "pct": 0.0700280112044818
+      }
+    ],
+    "top_blocker": "market_yes_price_out_of_band",
+    "asset_distribution": [
+      {
+        "asset": "sol",
+        "count": 238,
+        "top_reason": "market_yes_price_out_of_band"
+      },
+      {
+        "asset": "xrp",
+        "count": 238,
+        "top_reason": "market_yes_price_out_of_band"
+      },
+      {
+        "asset": "eth",
+        "count": 238,
+        "top_reason": "market_yes_price_out_of_band"
+      },
+      {
+        "asset": "doge",
+        "count": 238,
+        "top_reason": "liquidity_too_low"
+      },
+      {
+        "asset": "bnb",
+        "count": 238,
+        "top_reason": "liquidity_too_low"
+      },
+      {
+        "asset": "btc",
+        "count": 238,
+        "top_reason": "market_yes_price_out_of_band"
+      }
+    ]
+  },
+  "skip_time_trend": [
+    {
+      "hour_label": "2026-05-07 00:00",
+      "count": 60,
+      "top_reason": "market_yes_price_out_of_band"
+    },
+    {
+      "hour_label": "2026-05-07 01:00",
+      "count": 354,
+      "top_reason": "market_yes_price_out_of_band"
+    },
+    {
+      "hour_label": "2026-05-07 02:00",
+      "count": 360,
+      "top_reason": "market_yes_price_out_of_band"
+    },
+    {
+      "hour_label": "2026-05-07 03:00",
+      "count": 348,
+      "top_reason": "too_far_from_expiry"
+    },
+    {
+      "hour_label": "2026-05-07 04:00",
+      "count": 306,
+      "top_reason": "market_yes_price_out_of_band"
+    }
+  ],
+  "shadow_analysis": {
+    "total_resolved": 22,
+    "overall_wr": 0.5909090909090909,
+    "overall_pnl": 17.66848948,
+    "per_skip_reason": [
+      {
+        "reason": "macd_histogram_too_weak",
+        "count": 6,
+        "wr": 0.16666666666666666,
+        "pnl": -20.19607822
+      },
+      {
+        "reason": "no_edge_after_direction_override",
+        "count": 4,
+        "wr": 0.75,
+        "pnl": 3.5653237200000003
+      },
+      {
+        "reason": "edge_too_small",
+        "count": 3,
+        "wr": 0.6666666666666666,
+        "pnl": 1.4762158000000003
+      },
+      {
+        "reason": "direction_confidence_penalized",
+        "count": 3,
+        "wr": 0.6666666666666666,
+        "pnl": 8.80952392
+      },
+      {
+        "reason": "momentum_5m_too_weak",
+        "count": 2,
+        "wr": 0.5,
+        "pnl": 0.8695651
+      },
+      {
+        "reason": "adaptive_direction_blocked",
+        "count": 2,
+        "wr": 1.0,
+        "pnl": 12.72727232
+      },
+      {
+        "reason": "rsi_yes_over_max",
+        "count": 1,
+        "wr": 1.0,
+        "pnl": 5.41666684
+      },
+      {
+        "reason": "rsi_no_below_min",
+        "count": 1,
+        "wr": 1.0,
+        "pnl": 5.0
+      }
+    ],
+    "per_asset": [
+      {
+        "asset": "xrp",
+        "count": 7,
+        "wr": 0.5714285714285714,
+        "pnl": 5.65569936
+      },
+      {
+        "asset": "eth",
+        "count": 7,
+        "wr": 0.5714285714285714,
+        "pnl": 0.4794447400000008
+      },
+      {
+        "asset": "sol",
+        "count": 4,
+        "wr": 0.5,
+        "pnl": 2.727272320000001
+      },
+      {
+        "asset": "bnb",
+        "count": 2,
+        "wr": 0.5,
+        "pnl": 0.8695651
+      },
+      {
+        "asset": "doge",
+        "count": 1,
+        "wr": 1.0,
+        "pnl": 5.0
+      },
+      {
+        "asset": "btc",
+        "count": 1,
+        "wr": 1.0,
+        "pnl": 2.93650796
+      }
+    ]
+  },
+  "shadow_data_quality": {
+    "total_rows_scanned": 752,
+    "unresolved": 3,
+    "resolved": 749,
+    "eligible_for_analysis": 749,
+    "eligible_pct_of_resolved": 100.0,
+    "eligible_pct_of_total": 99.60106382978722,
+    "exclusion_breakdown": []
+  },
+  "shadow_opportunity_board_24h": {
+    "lookback_hours": 24,
+    "cells": [
+      {
+        "skip_reason": "edge_too_small",
+        "asset": "btc",
+        "count": 11,
+        "wr": 0.9090909090909091,
+        "pnl": 43.040025400000005,
+        "avg_pnl": 3.912729581818182,
+        "opportunity_tier": "high",
+        "score": 58.396751680567945
+      },
+      {
+        "skip_reason": "adaptive_direction_blocked",
+        "asset": "sol",
+        "count": 8,
+        "wr": 0.875,
+        "pnl": 33.07354788,
+        "avg_pnl": 4.134193485,
+        "opportunity_tier": "high",
+        "score": 35.07979497576894
+      },
+      {
+        "skip_reason": "direction_confidence_penalized",
+        "asset": "xrp",
+        "count": 10,
+        "wr": 0.8,
+        "pnl": 33.23425412,
+        "avg_pnl": 3.323425412,
+        "opportunity_tier": "high",
+        "score": 31.528781806810485
+      },
+      {
+        "skip_reason": "no_edge_after_direction_override",
+        "asset": "eth",
+        "count": 13,
+        "wr": 0.9230769230769231,
+        "pnl": 19.2530506,
+        "avg_pnl": 1.4810038923076925,
+        "opportunity_tier": "high",
+        "score": 29.369095100824232
+      },
+      {
+        "skip_reason": "taker_direction_misaligned",
+        "asset": "doge",
+        "count": 9,
+        "wr": 0.8888888888888888,
+        "pnl": 19.552353089999997,
+        "avg_pnl": 2.1724836766666664,
+        "opportunity_tier": "high",
+        "score": 22.81107860499999
+      },
+      {
+        "skip_reason": "edge_too_small",
+        "asset": "bnb",
+        "count": 5,
+        "wr": 0.8,
+        "pnl": 13.43614713,
+        "avg_pnl": 2.687229426,
+        "opportunity_tier": "medium",
+        "score": 15.022069169184352
+      },
+      {
+        "skip_reason": "no_edge_after_direction_override",
+        "asset": "btc",
+        "count": 5,
+        "wr": 1.0,
+        "pnl": 9.92471193,
+        "avg_pnl": 1.9849423860000002,
+        "opportunity_tier": "medium",
+        "score": 11.09616526629157
+      },
+      {
+        "skip_reason": "taker_direction_misaligned",
+        "asset": "bnb",
+        "count": 5,
+        "wr": 0.8,
+        "pnl": 8.80214294,
+        "avg_pnl": 1.760428588,
+        "opportunity_tier": "medium",
+        "score": 9.841094980754926
+      },
+      {
+        "skip_reason": "edge_too_small",
+        "asset": "xrp",
+        "count": 12,
+        "wr": 0.6666666666666666,
+        "pnl": 8.71510814,
+        "avg_pnl": 0.7262590116666666,
+        "opportunity_tier": "high",
+        "score": 5.031670030645698
+      },
+      {
+        "skip_reason": "no_edge_after_direction_override",
+        "asset": "sol",
+        "count": 5,
+        "wr": 0.8,
+        "pnl": 3.179824459999999,
+        "avg_pnl": 0.6359648919999998,
+        "opportunity_tier": "medium",
+        "score": 3.5551518245382794
+      },
+      {
+        "skip_reason": "edge_too_small",
+        "asset": "eth",
+        "count": 8,
+        "wr": 0.625,
+        "pnl": 8.1985068,
+        "avg_pnl": 1.02481335,
+        "opportunity_tier": "high",
+        "score": 2.8986098769420114
+      },
+      {
+        "skip_reason": "confidence_too_low",
+        "asset": "sol",
+        "count": 6,
+        "wr": 0.5,
+        "pnl": 0.6463015400000005,
+        "avg_pnl": 0.10771692333333342,
+        "opportunity_tier": "medium",
+        "score": 0.7915544964874865
+      },
+      {
+        "skip_reason": "macd_histogram_too_weak",
+        "asset": "bnb",
+        "count": 3,
+        "wr": 1.0,
+        "pnl": 16.95349081,
+        "avg_pnl": 5.651163603333334,
+        "opportunity_tier": "insufficient_sample",
+        "score": 0.0
+      },
+      {
+        "skip_reason": "confidence_too_low",
+        "asset": "xrp",
+        "count": 2,
+        "wr": 0.0,
+        "pnl": -10.0,
+        "avg_pnl": -5.0,
+        "opportunity_tier": "insufficient_sample",
+        "score": 0.0
+      },
+      {
+        "skip_reason": "macd_histogram_too_weak",
+        "asset": "sol",
+        "count": 4,
+        "wr": 0.25,
+        "pnl": -10.0,
+        "avg_pnl": -2.5,
+        "opportunity_tier": "insufficient_sample",
+        "score": 0.0
+      },
+      {
+        "skip_reason": "edge_too_small",
+        "asset": "doge",
+        "count": 3,
+        "wr": 1.0,
+        "pnl": 13.258733760000002,
+        "avg_pnl": 4.419577920000001,
+        "opportunity_tier": "insufficient_sample",
+        "score": 0.0
+      },
+      {
+        "skip_reason": "momentum_5m_too_weak",
+        "asset": "xrp",
+        "count": 2,
+        "wr": 0.5,
+        "pnl": 0.20408181999999986,
+        "avg_pnl": 0.10204090999999993,
+        "opportunity_tier": "insufficient_sample",
+        "score": 0.0
+      },
+      {
+        "skip_reason": "momentum_5m_too_weak",
+        "asset": "bnb",
+        "count": 4,
+        "wr": 0.5,
+        "pnl": 0.8695651,
+        "avg_pnl": 0.217391275,
+        "opportunity_tier": "insufficient_sample",
+        "score": 0.0
+      },
+      {
+        "skip_reason": "macd_histogram_too_weak",
+        "asset": "btc",
+        "count": 2,
+        "wr": 0.5,
+        "pnl": 5.625,
+        "avg_pnl": 2.8125,
+        "opportunity_tier": "insufficient_sample",
+        "score": 0.0
+      },
+      {
+        "skip_reason": "direction_confidence_penalized",
+        "asset": "btc",
+        "count": 1,
+        "wr": 1.0,
+        "pnl": 4.80392178,
+        "avg_pnl": 4.80392178,
+        "opportunity_tier": "insufficient_sample",
+        "score": 0.0
+      },
+      {
+        "skip_reason": "confidence_too_low",
+        "asset": "btc",
+        "count": 1,
+        "wr": 1.0,
+        "pnl": 5.20408182,
+        "avg_pnl": 5.20408182,
+        "opportunity_tier": "insufficient_sample",
+        "score": 0.0
+      },
+      {
+        "skip_reason": "volatility_filter",
+        "asset": "btc",
+        "count": 1,
+        "wr": 0.0,
+        "pnl": -5.0,
+        "avg_pnl": -5.0,
+        "opportunity_tier": "insufficient_sample",
+        "score": 0.0
+      },
+      {
+        "skip_reason": "rsi_yes_over_max",
+        "asset": "bnb",
+        "count": 2,
+        "wr": 0.5,
+        "pnl": 0.8695651,
+        "avg_pnl": 0.43478255,
+        "opportunity_tier": "insufficient_sample",
+        "score": 0.0
+      },
+      {
+        "skip_reason": "edge_too_small",
+        "asset": "sol",
+        "count": 3,
+        "wr": 0.3333333333333333,
+        "pnl": -7.06349204,
+        "avg_pnl": -2.3544973466666668,
+        "opportunity_tier": "insufficient_sample",
+        "score": 0.0
+      },
+      {
+        "skip_reason": "momentum_5m_too_weak",
+        "asset": "btc",
+        "count": 3,
+        "wr": 0.3333333333333333,
+        "pnl": -5.0,
+        "avg_pnl": -1.6666666666666667,
+        "opportunity_tier": "insufficient_sample",
+        "score": 0.0
+      },
+      {
+        "skip_reason": "rsi_no_below_min",
+        "asset": "btc",
+        "count": 1,
+        "wr": 1.0,
+        "pnl": 4.80392178,
+        "avg_pnl": 4.80392178,
+        "opportunity_tier": "insufficient_sample",
+        "score": 0.0
+      },
+      {
+        "skip_reason": "rsi_yes_over_max",
+        "asset": "eth",
+        "count": 3,
+        "wr": 1.0,
+        "pnl": 17.15579704,
+        "avg_pnl": 5.718599013333333,
+        "opportunity_tier": "insufficient_sample",
+        "score": 0.0
+      },
+      {
+        "skip_reason": "volatility_filter",
+        "asset": "bnb",
+        "count": 2,
+        "wr": 0.5,
+        "pnl": 1.3636361600000004,
+        "avg_pnl": 0.6818180800000002,
+        "opportunity_tier": "insufficient_sample",
+        "score": 0.0
+      },
+      {
+        "skip_reason": "momentum_5m_too_weak",
+        "asset": "doge",
+        "count": 2,
+        "wr": 1.0,
+        "pnl": 10.638297940000001,
+        "avg_pnl": 5.3191489700000005,
+        "opportunity_tier": "insufficient_sample",
+        "score": 0.0
+      },
+      {
+        "skip_reason": "rsi_no_below_min",
+        "asset": "sol",
+        "count": 3,
+        "wr": 1.0,
+        "pnl": 15.61224546,
+        "avg_pnl": 5.20408182,
+        "opportunity_tier": "insufficient_sample",
+        "score": 0.0
+      },
+      {
+        "skip_reason": "adaptive_direction_blocked",
+        "asset": "doge",
+        "count": 4,
+        "wr": 0.5,
+        "pnl": 1.2862319400000004,
+        "avg_pnl": 0.3215579850000001,
+        "opportunity_tier": "insufficient_sample",
+        "score": 0.0
+      },
+      {
+        "skip_reason": "rsi_no_below_min",
+        "asset": "doge",
+        "count": 1,
+        "wr": 1.0,
+        "pnl": 5.0,
+        "avg_pnl": 5.0,
+        "opportunity_tier": "insufficient_sample",
+        "score": 0.0
+      },
+      {
+        "skip_reason": "no_edge_after_direction_override",
+        "asset": "bnb",
+        "count": 1,
+        "wr": 1.0,
+        "pnl": 1.41025632,
+        "avg_pnl": 1.41025632,
+        "opportunity_tier": "insufficient_sample",
+        "score": 0.0
+      },
+      {
+        "skip_reason": "macd_histogram_too_weak",
+        "asset": "eth",
+        "count": 4,
+        "wr": 0.25,
+        "pnl": -9.583333159999999,
+        "avg_pnl": -2.3958332899999997,
+        "opportunity_tier": "insufficient_sample",
+        "score": 0.0
+      },
+      {
+        "skip_reason": "momentum_5m_too_weak",
+        "asset": "sol",
+        "count": 2,
+        "wr": 0.5,
+        "pnl": 0.0,
+        "avg_pnl": 0.0,
+        "opportunity_tier": "insufficient_sample",
+        "score": 0.0
+      },
+      {
+        "skip_reason": "rsi_no_below_min",
+        "asset": "eth",
+        "count": 1,
+        "wr": 1.0,
+        "pnl": 4.6153848,
+        "avg_pnl": 4.6153848,
+        "opportunity_tier": "insufficient_sample",
+        "score": 0.0
+      },
+      {
+        "skip_reason": "macd_histogram_too_weak",
+        "asset": "xrp",
+        "count": 13,
+        "wr": 0.46153846153846156,
+        "pnl": -1.7419096399999994,
+        "avg_pnl": -0.13399304923076918,
+        "opportunity_tier": "low",
+        "score": -0.06280544524245016
+      },
+      {
+        "skip_reason": "macd_histogram_too_weak",
+        "asset": "doge",
+        "count": 5,
+        "wr": 0.2,
+        "pnl": -14.583333159999999,
+        "avg_pnl": -2.9166666319999996,
+        "opportunity_tier": "low",
+        "score": -16.304662142143407
+      },
+      {
+        "skip_reason": "htf_trend_mismatch",
+        "asset": "btc",
+        "count": 6,
+        "wr": 0.16666666666666666,
+        "pnl": -18.63636384,
+        "avg_pnl": -3.1060606400000004,
+        "opportunity_tier": "low",
+        "score": -22.824791034427662
+      }
+    ],
+    "min_sample_high": 8,
+    "min_sample_medium": 5
+  },
+  "shadow_opportunity_board_72h": {
+    "lookback_hours": 72,
+    "cells": [
+      {
+        "skip_reason": "confidence_too_low",
+        "asset": "btc",
+        "count": 31,
+        "wr": 0.6774193548387096,
+        "pnl": 193.24077053999997,
+        "avg_pnl": 6.2335732432258055,
+        "opportunity_tier": "high",
+        "score": 190.88886826197864
+      },
+      {
+        "skip_reason": "no_edge_after_direction_override",
+        "asset": "eth",
+        "count": 38,
+        "wr": 0.8421052631578947,
+        "pnl": 37.96194285,
+        "avg_pnl": 0.9989984960526316,
+        "opportunity_tier": "high",
+        "score": 80.05712413415326
+      },
+      {
+        "skip_reason": "direction_confidence_penalized",
+        "asset": "xrp",
+        "count": 28,
+        "wr": 0.7142857142857143,
+        "pnl": 63.875066239999995,
+        "avg_pnl": 2.2812523657142854,
+        "opportunity_tier": "high",
+        "score": 72.42751724949325
+      },
+      {
+        "skip_reason": "adaptive_direction_blocked",
+        "asset": "sol",
+        "count": 11,
+        "wr": 0.8181818181818182,
+        "pnl": 38.105599520000005,
+        "avg_pnl": 3.4641454109090914,
+        "opportunity_tier": "high",
+        "score": 40.212446915259456
+      },
+      {
+        "skip_reason": "rsi_yes_over_max",
+        "asset": "eth",
+        "count": 5,
+        "wr": 0.8,
+        "pnl": 17.79409498,
+        "avg_pnl": 3.5588189960000003,
+        "opportunity_tier": "medium",
+        "score": 19.894402986683883
+      },
+      {
+        "skip_reason": "momentum_5m_too_weak",
+        "asset": "bnb",
+        "count": 19,
+        "wr": 0.631578947368421,
+        "pnl": 31.250282249999994,
+        "avg_pnl": 1.6447516973684209,
+        "opportunity_tier": "high",
+        "score": 17.923266090114844
+      },
+      {
+        "skip_reason": "edge_too_small",
+        "asset": "doge",
+        "count": 9,
+        "wr": 0.7777777777777778,
+        "pnl": 21.39144851,
+        "avg_pnl": 2.3768276122222223,
+        "opportunity_tier": "high",
+        "score": 17.826207091666667
+      },
+      {
+        "skip_reason": "edge_too_small",
+        "asset": "bnb",
+        "count": 20,
+        "wr": 0.65,
+        "pnl": 23.53946576,
+        "avg_pnl": 1.176973288,
+        "opportunity_tier": "high",
+        "score": 15.790753678016628
+      },
+      {
+        "skip_reason": "no_edge_after_direction_override",
+        "asset": "btc",
+        "count": 14,
+        "wr": 0.8571428571428571,
+        "pnl": 10.66612863,
+        "avg_pnl": 0.7618663307142857,
+        "opportunity_tier": "high",
+        "score": 14.253213920257325
+      },
+      {
+        "skip_reason": "macd_histogram_too_weak",
+        "asset": "bnb",
+        "count": 7,
+        "wr": 0.5714285714285714,
+        "pnl": 7.823055909999999,
+        "avg_pnl": 1.1175794157142855,
+        "opportunity_tier": "medium",
+        "score": 10.348930215207046
+      },
+      {
+        "skip_reason": "no_edge_after_direction_override",
+        "asset": "xrp",
+        "count": 6,
+        "wr": 0.8333333333333334,
+        "pnl": 7.772094310000001,
+        "avg_pnl": 1.2953490516666668,
+        "opportunity_tier": "medium",
+        "score": 9.51883264614425
+      },
+      {
+        "skip_reason": "edge_too_small",
+        "asset": "btc",
+        "count": 18,
+        "wr": 0.6111111111111112,
+        "pnl": 18.0400254,
+        "avg_pnl": 1.0022236333333334,
+        "opportunity_tier": "high",
+        "score": 8.504149528745044
+      },
+      {
+        "skip_reason": "momentum_5m_too_weak",
+        "asset": "doge",
+        "count": 7,
+        "wr": 0.5714285714285714,
+        "pnl": 6.259046600000001,
+        "avg_pnl": 0.8941495142857144,
+        "opportunity_tier": "medium",
+        "score": 8.279940373982186
+      },
+      {
+        "skip_reason": "taker_direction_misaligned",
+        "asset": "bnb",
+        "count": 19,
+        "wr": 0.631578947368421,
+        "pnl": 13.66348412,
+        "avg_pnl": 0.7191307431578947,
+        "opportunity_tier": "high",
+        "score": 7.8365455915464155
+      },
+      {
+        "skip_reason": "volatility_filter",
+        "asset": "bnb",
+        "count": 15,
+        "wr": 0.6,
+        "pnl": 19.404200110000005,
+        "avg_pnl": 1.293613340666667,
+        "opportunity_tier": "high",
+        "score": 7.515214387250613
+      },
+      {
+        "skip_reason": "taker_direction_misaligned",
+        "asset": "doge",
+        "count": 15,
+        "wr": 0.6666666666666666,
+        "pnl": 9.77294171,
+        "avg_pnl": 0.6515294473333333,
+        "opportunity_tier": "high",
+        "score": 6.308406747714304
+      },
+      {
+        "skip_reason": "edge_too_small",
+        "asset": "eth",
+        "count": 22,
+        "wr": 0.5909090909090909,
+        "pnl": 14.448389529999998,
+        "avg_pnl": 0.6567449786363636,
+        "opportunity_tier": "high",
+        "score": 6.160813995961806
+      },
+      {
+        "skip_reason": "macd_histogram_too_weak",
+        "asset": "eth",
+        "count": 15,
+        "wr": 0.5333333333333333,
+        "pnl": 33.03668866,
+        "avg_pnl": 2.202445910666667,
+        "opportunity_tier": "medium",
+        "score": 4.265018166467314
+      },
+      {
+        "skip_reason": "adaptive_direction_blocked",
+        "asset": "doge",
+        "count": 12,
+        "wr": 0.5833333333333334,
+        "pnl": 13.47786065,
+        "avg_pnl": 1.1231550541666666,
+        "opportunity_tier": "high",
+        "score": 3.890723237188884
+      },
+      {
+        "skip_reason": "no_edge_after_direction_override",
+        "asset": "sol",
+        "count": 5,
+        "wr": 0.8,
+        "pnl": 3.179824459999999,
+        "avg_pnl": 0.6359648919999998,
+        "opportunity_tier": "medium",
+        "score": 3.5551518245382794
+      },
+      {
+        "skip_reason": "macd_histogram_too_weak",
+        "asset": "doge",
+        "count": 27,
+        "wr": 0.5185185185185185,
+        "pnl": 13.362249909999996,
+        "avg_pnl": 0.49489814481481464,
+        "opportunity_tier": "medium",
+        "score": 1.2857830970862563
+      },
+      {
+        "skip_reason": "momentum_5m_too_weak",
+        "asset": "btc",
+        "count": 20,
+        "wr": 0.5,
+        "pnl": 18.60987882,
+        "avg_pnl": 0.9304939409999999,
+        "opportunity_tier": "medium",
+        "score": 0.8322590818910716
+      },
+      {
+        "skip_reason": "confidence_too_low",
+        "asset": "sol",
+        "count": 38,
+        "wr": 0.5,
+        "pnl": 2.7236547500000023,
+        "avg_pnl": 0.07167512500000006,
+        "opportunity_tier": "medium",
+        "score": 0.1678973548015298
+      },
+      {
+        "skip_reason": "macd_histogram_too_weak",
+        "asset": "btc",
+        "count": 8,
+        "wr": 0.375,
+        "pnl": 0.33088212000000006,
+        "avg_pnl": 0.04136026500000001,
+        "opportunity_tier": "medium",
+        "score": 0.00935875963301524
+      },
+      {
+        "skip_reason": "direction_confidence_penalized",
+        "asset": "eth",
+        "count": 1,
+        "wr": 0.0,
+        "pnl": -5.0,
+        "avg_pnl": -5.0,
+        "opportunity_tier": "insufficient_sample",
+        "score": 0.0
+      },
+      {
+        "skip_reason": "momentum_5m_too_weak",
+        "asset": "eth",
+        "count": 2,
+        "wr": 0.5,
+        "pnl": 5.625,
+        "avg_pnl": 2.8125,
+        "opportunity_tier": "insufficient_sample",
+        "score": 0.0
+      },
+      {
+        "skip_reason": "rsi_no_below_min",
+        "asset": "eth",
+        "count": 1,
+        "wr": 1.0,
+        "pnl": 4.6153848,
+        "avg_pnl": 4.6153848,
+        "opportunity_tier": "insufficient_sample",
+        "score": 0.0
+      },
+      {
+        "skip_reason": "rsi_yes_over_max",
+        "asset": "bnb",
+        "count": 2,
+        "wr": 0.5,
+        "pnl": 0.8695651,
+        "avg_pnl": 0.43478255,
+        "opportunity_tier": "insufficient_sample",
+        "score": 0.0
+      },
+      {
+        "skip_reason": "rsi_no_below_min",
+        "asset": "bnb",
+        "count": 2,
+        "wr": 0.5,
+        "pnl": -0.1960782200000004,
+        "avg_pnl": -0.0980391100000002,
+        "opportunity_tier": "insufficient_sample",
+        "score": 0.0
+      },
+      {
+        "skip_reason": "volatility_filter",
+        "asset": "sol",
+        "count": 2,
+        "wr": 1.0,
+        "pnl": 14.90996394,
+        "avg_pnl": 7.45498197,
+        "opportunity_tier": "insufficient_sample",
+        "score": 0.0
+      },
+      {
+        "skip_reason": "direction_confidence_penalized",
+        "asset": "btc",
+        "count": 3,
+        "wr": 0.3333333333333333,
+        "pnl": -5.19607822,
+        "avg_pnl": -1.7320260733333335,
+        "opportunity_tier": "insufficient_sample",
+        "score": 0.0
+      },
+      {
+        "skip_reason": "confidence_too_low",
+        "asset": "bnb",
+        "count": 1,
+        "wr": 0.0,
+        "pnl": -5.0,
+        "avg_pnl": -5.0,
+        "opportunity_tier": "insufficient_sample",
+        "score": 0.0
+      },
+      {
+        "skip_reason": "no_edge_after_direction_override",
+        "asset": "bnb",
+        "count": 2,
+        "wr": 1.0,
+        "pnl": 5.03094612,
+        "avg_pnl": 2.51547306,
+        "opportunity_tier": "insufficient_sample",
+        "score": 0.0
+      },
+      {
+        "skip_reason": "rsi_no_below_min",
+        "asset": "doge",
+        "count": 4,
+        "wr": 0.75,
+        "pnl": 10.0,
+        "avg_pnl": 2.5,
+        "opportunity_tier": "insufficient_sample",
+        "score": 0.0
+      },
+      {
+        "skip_reason": "rsi_no_below_min",
+        "asset": "xrp",
+        "count": 2,
+        "wr": 0.5,
+        "pnl": -0.3846151999999998,
+        "avg_pnl": -0.1923075999999999,
+        "opportunity_tier": "insufficient_sample",
+        "score": 0.0
+      },
+      {
+        "skip_reason": "volatility_filter",
+        "asset": "btc",
+        "count": 1,
+        "wr": 0.0,
+        "pnl": -5.0,
+        "avg_pnl": -5.0,
+        "opportunity_tier": "insufficient_sample",
+        "score": 0.0
+      },
+      {
+        "skip_reason": "rsi_no_below_min",
+        "asset": "sol",
+        "count": 3,
+        "wr": 1.0,
+        "pnl": 15.61224546,
+        "avg_pnl": 5.20408182,
+        "opportunity_tier": "insufficient_sample",
+        "score": 0.0
+      },
+      {
+        "skip_reason": "confidence_too_low",
+        "asset": "eth",
+        "count": 4,
+        "wr": 0.75,
+        "pnl": 19.23076906,
+        "avg_pnl": 4.807692265,
+        "opportunity_tier": "insufficient_sample",
+        "score": 0.0
+      },
+      {
+        "skip_reason": "no_edge_after_direction_override",
+        "asset": "doge",
+        "count": 1,
+        "wr": 0.0,
+        "pnl": -5.0,
+        "avg_pnl": -5.0,
+        "opportunity_tier": "insufficient_sample",
+        "score": 0.0
+      },
+      {
+        "skip_reason": "rsi_no_below_min",
+        "asset": "btc",
+        "count": 1,
+        "wr": 1.0,
+        "pnl": 4.80392178,
+        "avg_pnl": 4.80392178,
+        "opportunity_tier": "insufficient_sample",
+        "score": 0.0
+      },
+      {
+        "skip_reason": "momentum_5m_too_weak",
+        "asset": "sol",
+        "count": 13,
+        "wr": 0.46153846153846156,
+        "pnl": -0.583058499999999,
+        "avg_pnl": -0.04485065384615377,
+        "opportunity_tier": "low",
+        "score": -0.021022473183451167
+      },
+      {
+        "skip_reason": "momentum_5m_too_weak",
+        "asset": "xrp",
+        "count": 8,
+        "wr": 0.375,
+        "pnl": -6.558738409999999,
+        "avg_pnl": -0.8198423012499999,
+        "opportunity_tier": "low",
+        "score": -0.18550913622958698
+      },
+      {
+        "skip_reason": "edge_too_small",
+        "asset": "xrp",
+        "count": 39,
+        "wr": 0.5128205128205128,
+        "pnl": -14.847756539999995,
+        "avg_pnl": -0.38071170615384603,
+        "opportunity_tier": "low",
+        "score": -1.1887719214487997
+      },
+      {
+        "skip_reason": "macd_histogram_too_weak",
+        "asset": "sol",
+        "count": 19,
+        "wr": 0.3157894736842105,
+        "pnl": -30.859266459999997,
+        "avg_pnl": -1.6241719189473682,
+        "opportunity_tier": "low",
+        "score": -1.3451242397093413
+      },
+      {
+        "skip_reason": "macd_histogram_too_weak",
+        "asset": "xrp",
+        "count": 53,
+        "wr": 0.4339622641509434,
+        "pnl": -24.377130159999997,
+        "avg_pnl": -0.4599458520754716,
+        "opportunity_tier": "low",
+        "score": -1.7746818635009436
+      },
+      {
+        "skip_reason": "htf_trend_mismatch",
+        "asset": "btc",
+        "count": 27,
+        "wr": 0.18518518518518517,
+        "pnl": -74.69870322,
+        "avg_pnl": -2.766618637777778,
+        "opportunity_tier": "low",
+        "score": -3.8814584770964666
+      },
+      {
+        "skip_reason": "confidence_too_low",
+        "asset": "xrp",
+        "count": 7,
+        "wr": 0.42857142857142855,
+        "pnl": -4.0983832599999985,
+        "avg_pnl": -0.5854833228571427,
+        "opportunity_tier": "low",
+        "score": -5.421651441695084
+      },
+      {
+        "skip_reason": "edge_too_small",
+        "asset": "sol",
+        "count": 7,
+        "wr": 0.42857142857142855,
+        "pnl": -8.37027076,
+        "avg_pnl": -1.1957529657142858,
+        "opportunity_tier": "low",
+        "score": -11.072827418617804
+      }
+    ],
+    "min_sample_high": 8,
+    "min_sample_medium": 5
+  },
+  "filter_param_mapping": [
+    {
+      "skip_reason": "liquidity_too_low",
+      "config_parameters": [
+        "min_liquidity (global / per-asset)",
+        "[liquidity_adapt]"
+      ],
+      "notes": "Lower effective min_liquidity widens tradable books; use per-asset or adapt module to limit risk."
+    },
+    {
+      "skip_reason": "market_yes_price_out_of_band",
+      "config_parameters": [
+        "min_market_yes_price",
+        "max_market_yes_price"
+      ],
+      "notes": "Widen band only where shadow shows persistent profitability at skipped prices."
+    },
+    {
+      "skip_reason": "too_far_from_expiry",
+      "config_parameters": [
+        "max_secs_to_close"
+      ],
+      "notes": "Larger max_secs allows earlier entries; increases time/mark-to-market risk."
+    },
+    {
+      "skip_reason": "too_close_to_expiry",
+      "config_parameters": [
+        "min_secs_to_close"
+      ],
+      "notes": "Lower min_secs trades closer to resolution; slippage and resolution risk rise."
+    },
+    {
+      "skip_reason": "spot_volume_below_threshold",
+      "config_parameters": [
+        "volume_min_ratio (per-asset or global)"
+      ],
+      "notes": "Lower ratio admits thinner spot tape confirmation; do per-asset first."
+    },
+    {
+      "skip_reason": "edge_too_small",
+      "config_parameters": [
+        "min_edge",
+        "[adaptive] multipliers"
+      ],
+      "notes": "Lowering edge boosts frequency; combine with shadow/live WR guardrails."
+    },
+    {
+      "skip_reason": "confidence_too_low",
+      "config_parameters": [
+        "min_confidence"
+      ],
+      "notes": "Lowering min_confidence increases false positives; prefer direction penalties first."
+    },
+    {
+      "skip_reason": "macd_histogram_too_weak",
+      "config_parameters": [
+        "min_macd_histogram_abs"
+      ],
+      "notes": "Smaller threshold weakens momentum filter."
+    },
+    {
+      "skip_reason": "momentum_5m_too_weak",
+      "config_parameters": [
+        "min_momentum_5m_abs"
+      ],
+      "notes": "Lower threshold admits weaker short-term drift."
+    },
+    {
+      "skip_reason": "volatility_filter",
+      "config_parameters": [
+        "[volatility]"
+      ],
+      "notes": "Relax volatility caps only after checking worst-case drawdown in shadow."
+    },
+    {
+      "skip_reason": "taker_direction_misaligned",
+      "config_parameters": [
+        "taker_direction_confirm"
+      ],
+      "notes": "Disabling confirm loosens flow alignment requirement."
+    },
+    {
+      "skip_reason": "htf_trend_mismatch",
+      "config_parameters": [
+        "htf_enabled"
+      ],
+      "notes": "Turning HTF off or narrowing lookback changes regime filter."
+    }
+  ],
+  "tuning_packages": {
+    "packages": [
+      {
+        "id": "conservative",
+        "label": "Conservative — 1–2 knobs, asset-scoped",
+        "parameter_changes": [
+          "Pick highest-score (reason, asset) from shadow_opportunity_board with tier=high.",
+          "Adjust only the parameters listed in filter_param_mapping for that skip_reason.",
+          "Prefer per-asset overrides in config over global strategy section."
+        ],
+        "expected_effect": "Modest increase in trade frequency; attribution stays clear.",
+        "risk_notes": "If live WR drops, revert single asset block first."
+      },
+      {
+        "id": "medium",
+        "label": "Medium — 2 filters, still asset-scoped",
+        "parameter_changes": [
+          "Combine (e.g.) liquidity_too_low + market_yes_price_out_of_band for one asset with strong shadow PnL.",
+          "Keep [shadow_calibration] live veto on; avoid simultaneous global changes."
+        ],
+        "expected_effect": "Noticeable frequency lift; slightly harder to attribute.",
+        "risk_notes": "Watch order_size_below_minimum and slippage; roll back the second change first."
+      },
+      {
+        "id": "aggressive",
+        "label": "Aggressive — global + multiple filters",
+        "parameter_changes": [
+          "Global min_liquidity, wider YES band, and looser volume — only after 24h conservative canary passes.",
+          "Bump strategy_version to reset calibration if strategy semantics change materially."
+        ],
+        "expected_effect": "High activity; highest tail risk.",
+        "risk_notes": "Requires strict drawdown stop and immediate rollback path; not recommended without canary."
+      }
+    ]
+  },
+  "canary_playbook": {
+    "duration_hours": 24,
+    "success_metrics": [
+      "Realized trade count vs baseline (same clock hours).",
+      "Rolling live WR and total PnL not worse than pre-change by more than agreed tolerance (e.g. -10% WR or negative PnL spike).",
+      "No explosion of new dominant skip_reasons indicating unintended loosening (e.g. bad fills)."
+    ],
+    "rollback_rules": [
+      "Revert last config change and bump strategy_version if calibration state must reset.",
+      "If daily_loss or risk caps trip, stop canary and restore previous config.toml snapshot.",
+      "If shadow_opportunity_board flips to negative PnL for the tuned (reason, asset), tighten before waiting full 24h."
+    ],
+    "monitoring_checklist": [
+      "Tail logs for skip reasons hourly; compare to inactivity_report skip_analysis.",
+      "Verify calibration_state.json only drifts as expected (shadow_calibration + liquidity_adapt).",
+      "Check balance_state / drawdown vs peak after first 6h."
+    ]
+  },
+  "calibration_status": {
+    "loaded": true,
+    "global_version": 68,
+    "strategy_version": "3",
+    "per_asset": [
+      {
+        "asset": "bnb",
+        "calibration_version": 60,
+        "shadow_wr": 0.6037735849056604,
+        "shadow_pnl": 97.01105995999998,
+        "shadow_trade_count": 106,
+        "last_calibrated_at": "2026-05-06T20:52:06.597354600+00:00",
+        "rolled_back": false,
+        "drift_params": 12
+      },
+      {
+        "asset": "btc",
+        "calibration_version": 64,
+        "shadow_wr": 0.48,
+        "shadow_pnl": 132.27920006000002,
+        "shadow_trade_count": 150,
+        "last_calibrated_at": "2026-05-06T23:36:19.931891300+00:00",
+        "rolled_back": false,
+        "drift_params": 12
+      },
+      {
+        "asset": "doge",
+        "calibration_version": 65,
+        "shadow_wr": 0.6185567010309279,
+        "shadow_pnl": 108.88011014999998,
+        "shadow_trade_count": 97,
+        "last_calibrated_at": "2026-05-07T00:05:31.927467600+00:00",
+        "rolled_back": false,
+        "drift_params": 12
+      },
+      {
+        "asset": "eth",
+        "calibration_version": 66,
+        "shadow_wr": 0.7126436781609196,
+        "shadow_pnl": 134.19805983999996,
+        "shadow_trade_count": 87,
+        "last_calibrated_at": "2026-05-07T00:35:44.682333600+00:00",
+        "rolled_back": false,
+        "drift_params": 12
+      },
+      {
+        "asset": "sol",
+        "calibration_version": 55,
+        "shadow_wr": 0.4909090909090909,
+        "shadow_pnl": -3.4581403100000143,
+        "shadow_trade_count": 110,
+        "last_calibrated_at": "2026-05-06T18:06:43.903918600+00:00",
+        "rolled_back": false,
+        "drift_params": 8
+      },
+      {
+        "asset": "xrp",
+        "calibration_version": 68,
+        "shadow_wr": 0.5176470588235295,
+        "shadow_pnl": 8.093304359999973,
+        "shadow_trade_count": 170,
+        "last_calibrated_at": "2026-05-07T03:20:56.044585300+00:00",
+        "rolled_back": false,
+        "drift_params": 10
+      }
+    ]
+  },
+  "balance_trend": {
+    "data_points": [
+      {
+        "timestamp": "2026-05-06T07:18:02.189004900Z",
+        "balance": 278.7716751651037
+      },
+      {
+        "timestamp": "2026-05-06T09:49:05.539406400Z",
+        "balance": 265.81167516510374
+      },
+      {
+        "timestamp": "2026-05-06T10:18:18.333695300Z",
+        "balance": 273.05305447544856
+      },
+      {
+        "timestamp": "2026-05-06T11:17:42.926748900Z",
+        "balance": 294.30305447544856
+      },
+      {
+        "timestamp": "2026-05-06T11:18:43.686301400Z",
+        "balance": 284.30305447544856
+      },
+      {
+        "timestamp": "2026-05-06T11:19:44.462250400Z",
+        "balance": 274.30305447544856
+      },
+      {
+        "timestamp": "2026-05-06T12:03:03.974275500Z",
+        "balance": 329.05791108969464
+      },
+      {
+        "timestamp": "2026-05-06T13:33:46.759005400Z",
+        "balance": 340.7970415244772
+      },
+      {
+        "timestamp": "2026-05-06T14:47:20.637582700Z",
+        "balance": 330.7970415244772
+      },
+      {
+        "timestamp": "2026-05-06T16:48:07.886695800Z",
+        "balance": 320.7970415244772
+      },
+      {
+        "timestamp": "2026-05-06T17:17:20.795794800Z",
+        "balance": 332.0736372691581
+      },
+      {
+        "timestamp": "2026-05-06T17:17:20.798014800Z",
+        "balance": 316.9736372691581
+      },
+      {
+        "timestamp": "2026-05-06T19:47:29.882785Z",
+        "balance": 358.6936372691581
+      },
+      {
+        "timestamp": "2026-05-06T21:32:23.778252700Z",
+        "balance": 369.5269706024914
+      },
+      {
+        "timestamp": "2026-05-07T00:49:50.874956600Z",
+        "balance": 379.13481373974633
+      }
+    ],
+    "peak_balance": 379.13481373974633,
+    "trough_balance": 265.81167516510374,
+    "current_drawdown_pct": 0.0
+  },
+  "recommendations": [
+    {
+      "asset": "bnb",
+      "priority": "INFO",
+      "category": "calibration_drift",
+      "message": "bnb: 12 calibrated parameter overrides active (shadow calibration). Review overrides vs base config if behaviour diverges from expectations."
+    },
+    {
+      "asset": "btc",
+      "priority": "INFO",
+      "category": "calibration_drift",
+      "message": "btc: 12 calibrated parameter overrides active (shadow calibration). Review overrides vs base config if behaviour diverges from expectations."
+    },
+    {
+      "asset": "doge",
+      "priority": "INFO",
+      "category": "calibration_drift",
+      "message": "doge: 12 calibrated parameter overrides active (shadow calibration). Review overrides vs base config if behaviour diverges from expectations."
+    },
+    {
+      "asset": "eth",
+      "priority": "INFO",
+      "category": "calibration_drift",
+      "message": "eth: 12 calibrated parameter overrides active (shadow calibration). Review overrides vs base config if behaviour diverges from expectations."
+    },
+    {
+      "asset": "xrp",
+      "priority": "INFO",
+      "category": "calibration_drift",
+      "message": "xrp: 10 calibrated parameter overrides active (shadow calibration). Review overrides vs base config if behaviour diverges from expectations."
+    },
+    {
+      "asset": "eth",
+      "priority": "MEDIUM",
+      "category": "direction_imbalance",
+      "message": "eth: YES 50% WR (n=2) vs NO 100% WR (n=2) — gap 50 pp. Weaker side recently: YES. Review direction penalties or `blocked_direction`."
+    },
+    {
+      "asset": "btc",
+      "priority": "MEDIUM",
+      "category": "shadow_opportunity_board",
+      "message": "Shadow board (72h): skip_reason='confidence_too_low' on btc — n=31, 68% WR, 193.24 USDC PnL, score=190.89. See `filter_param_mapping` + `tuning_packages` in this report."
+    },
+    {
+      "asset": "eth",
+      "priority": "MEDIUM",
+      "category": "shadow_opportunity_board",
+      "message": "Shadow board (72h): skip_reason='no_edge_after_direction_override' on eth — n=38, 84% WR, 37.96 USDC PnL, score=80.06. See `filter_param_mapping` + `tuning_packages` in this report."
+    },
+    {
+      "asset": "xrp",
+      "priority": "MEDIUM",
+      "category": "shadow_opportunity_board",
+      "message": "Shadow board (72h): skip_reason='direction_confidence_penalized' on xrp — n=28, 71% WR, 63.88 USDC PnL, score=72.43. See `filter_param_mapping` + `tuning_packages` in this report."
+    }
+  ]
+}
